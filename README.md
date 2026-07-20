@@ -72,4 +72,4 @@ python tests/test_harness.py
 python tests/audit_report.py
 ```
 
-*Note: The test suites mock only the LLM boundary (no real OpenAI calls are made unless configured otherwise) so it can run without network access. Everything else — routing, RAG search, ATEX threshold logic, the human-approval pause/resume cycle, CEMG probation, and LLMOps writes — is real code.*
+*Note: The test suites mock only the LLM boundary, so they can run without network access. Everything else: routing, RAG search, ATEX threshold logic, the human-approval pause/resume cycle, CEMG probation, and LLMOps writes is real code.*
