@@ -1,0 +1,44 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	InputGuardrail(InputGuardrail)
+	TriageRouter(TriageRouter)
+	ResolveEquipment(ResolveEquipment)
+	DocumentRetriever(DocumentRetriever)
+	ATEXHazardCheck(ATEXHazardCheck)
+	FanOutOrchestrator(FanOutOrchestrator)
+	SynthesisAgent(SynthesisAgent)
+	OutputGuardrail(OutputGuardrail)
+	ActionAgent(ActionAgent)
+	ProfileConsolidationAgent(ProfileConsolidationAgent)
+	LogbookExtractionAgent(LogbookExtractionAgent)
+	VesselCompatibilityAgent(VesselCompatibilityAgent)
+	ChecklistAgent(ChecklistAgent)
+	AuditNode(AuditNode)
+	__end__([<p>__end__</p>]):::last
+	ATEXHazardCheck -.-> ChecklistAgent;
+	ATEXHazardCheck -.-> FanOutOrchestrator;
+	ATEXHazardCheck -.-> LogbookExtractionAgent;
+	ATEXHazardCheck -.-> VesselCompatibilityAgent;
+	ActionAgent --> ProfileConsolidationAgent;
+	ChecklistAgent --> AuditNode;
+	DocumentRetriever --> ATEXHazardCheck;
+	FanOutOrchestrator --> SynthesisAgent;
+	InputGuardrail -.-> SynthesisAgent;
+	InputGuardrail -.-> TriageRouter;
+	LogbookExtractionAgent --> AuditNode;
+	OutputGuardrail --> ActionAgent;
+	ProfileConsolidationAgent --> AuditNode;
+	ResolveEquipment --> DocumentRetriever;
+	SynthesisAgent --> OutputGuardrail;
+	TriageRouter --> ResolveEquipment;
+	VesselCompatibilityAgent --> AuditNode;
+	__start__ --> InputGuardrail;
+	AuditNode --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
