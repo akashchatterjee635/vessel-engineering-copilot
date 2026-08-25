@@ -1,0 +1,42 @@
+model:
+  name: gpt-4.1
+  temperature: 0
+  max_tokens: 4096
+  cost_per_million_prompt_tokens: 2.50
+  cost_per_million_completion_tokens: 10.00
+
+guardrails:
+  input:
+    bypass_keywords:
+      - override
+      - bypass
+      - disable safety
+      - force
+      - ignore protocol
+  output:
+    atex_lel_advisory_threshold: 10.0
+    atex_lel_critical_threshold: 20.0
+    require_safety_alert_on_atex: true
+
+feature_flags:
+  mcp_servers_enabled: true
+  cemg_enabled: true
+  rag_enabled: true
+  prometheus_enabled: true
+
+mcp_servers:
+  telemetry:
+    url: http://mcp-telemetry:8001/mcp
+    timeout_seconds: 10
+  compliance:
+    url: http://mcp-compliance:8002/mcp
+    timeout_seconds: 10
+  history:
+    url: http://mcp-history:8003/mcp
+    timeout_seconds: 10
+  weather:
+    url: http://mcp-weather:8004/mcp
+    timeout_seconds: 10
+  port_services:
+    url: http://mcp-port-services:8005/mcp
+    timeout_seconds: 10

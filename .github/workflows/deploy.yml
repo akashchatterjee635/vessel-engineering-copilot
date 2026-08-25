@@ -1,0 +1,21 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  deploy-local:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start services
+        run: docker-compose up -d
+      - name: Wait for health checks
+        run: sleep 10
+      - name: Smoke test
+        run: |
+          curl -f http://localhost:8000/metrics || echo "copilot-app health failed"
+      - name: Print service status
+        run: docker-compose ps

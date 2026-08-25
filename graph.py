@@ -1,29 +1,46 @@
 """
-Vessel Engineering Copilot — full orchestrator (v4 with CEMG + LLMOps + Guardrails)
+Vessel Engineering Copilot — full orchestrator (v5 with MCP + CEMG + LLMOps + Guardrails + Prometheus)
 
 Covers:
-1. Input and Output Guardrails (Safety overrides & warning check).
-2. Advanced RAG (Document search in manual pages).
-3. Persistent SQLite Checkpointing (LangGraph SqliteSaver).
-4. CEMG Causal Experience Memory (tool peeking, storing outcomes, cooldowns).
-5. LLMOps logging (token count, cost estimations, and latency logging).
+1. FastMCP Remote Server Integration (Streamable HTTP transport).
+2. Input and Output Guardrails (Safety overrides & warning check).
+3. Advanced RAG (Document search in manual pages).
+4. Persistent SQLite Checkpointing (LangGraph SqliteSaver).
+5. CEMG Causal Experience Memory (tool peeking, storing outcomes, cooldowns).
+6. LLMOps logging (token count, cost estimations, and latency logging).
+7. Prometheus metrics instrumentation.
 """
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
 import sqlite3
+from contextlib import asynccontextmanager
 from functools import partial
 from typing import Any, Dict, List, Literal, Optional
 
 import aiosqlite
 import tiktoken
+import yaml
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel
 from typing_extensions import TypedDict
+
+try:
+    from prometheus_client import Counter, Histogram, Gauge, start_http_server as prom_start
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+
+try:
+    from fastmcp import Client as MCPClient
+    FASTMCP_AVAILABLE = True
+except ImportError:
+    FASTMCP_AVAILABLE = False
 
 import db
 
@@ -31,17 +48,128 @@ import db
 from cemg.storage import SqliteStorage
 from cemg.memory import build_memory_block, peek_signature_status, store_experience
 
+logger = logging.getLogger(__name__)
+
 DB_PATH = os.environ.get("VESSEL_COPILOT_DB", "vessel_copilot.db")
 CHECKPOINTS_DB_PATH = os.environ.get("VESSEL_COPILOT_CHECKPOINTS_DB", "vessel_checkpoints.db")
 OPENAI_MODEL = os.environ.get("VESSEL_COPILOT_MODEL", "gpt-4.1")
+MCP_SERVERS_ENABLED = os.environ.get("MCP_SERVERS_ENABLED", "false").lower() == "true"
 
-# ATEX thresholds — mocked here as % LEL (lower explosive limit) readings.
-ATEX_WARNING_THRESHOLD = 10.0
-ATEX_CRITICAL_THRESHOLD = 20.0
+# --- 0. Model Config (from YAML if present) ---
+_CONFIG_PATH = os.environ.get("MODEL_CONFIG_PATH", "mlops/model_config.yaml")
+_config: Dict[str, Any] = {}
+if os.path.exists(_CONFIG_PATH):
+    with open(_CONFIG_PATH, "r") as f:
+        _config = yaml.safe_load(f) or {}
+
+# ATEX thresholds from config or defaults
+_guardrail_cfg = _config.get("guardrails", {}).get("output", {})
+ATEX_WARNING_THRESHOLD = _guardrail_cfg.get("atex_lel_advisory_threshold", 10.0)
+ATEX_CRITICAL_THRESHOLD = _guardrail_cfg.get("atex_lel_critical_threshold", 20.0)
 
 # --- 1. CEMG Initialization ---
 CEMG_DB_PATH = os.environ.get("CEMG_SQLITE_PATH", "cemg_memory.db")
 cemg_storage = SqliteStorage(db_path=CEMG_DB_PATH)
+
+
+# --- 1b. Prometheus Metrics ---
+if PROMETHEUS_AVAILABLE and _config.get("feature_flags", {}).get("prometheus_enabled", False):
+    LLM_CALL_COUNTER = Counter("copilot_llm_calls_total", "Total LLM API invocations", ["node_name"])
+    LLM_TOKEN_COUNTER = Counter("copilot_llm_tokens_total", "Total LLM tokens consumed", ["token_type"])
+    LLM_COST_COUNTER = Counter("copilot_llm_cost_dollars", "Estimated LLM API cost in USD")
+    TOOL_LATENCY_HISTOGRAM = Histogram("copilot_tool_latency_seconds", "MCP tool execution latency", ["tool_name"], buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
+    GUARDRAIL_BLOCK_COUNTER = Counter("copilot_guardrail_blocks_total", "Total guardrail blocks", ["guardrail_type"])
+    ATEX_ALERT_COUNTER = Counter("copilot_atex_alerts_total", "Total ATEX alerts raised", ["severity"])
+    CEMG_FAILURE_COUNTER = Counter("copilot_cemg_failures_total", "Tools blocked or failed via CEMG", ["tool_name"])
+    ACTIVE_THREADS_GAUGE = Gauge("copilot_active_threads", "Number of active conversation threads")
+    _PROM_ENABLED = True
+    # Start Prometheus metrics HTTP server on port 9090
+    try:
+        prom_start(9090)
+        logger.info("Prometheus metrics server started on :9090")
+    except OSError:
+        logger.warning("Prometheus metrics port 9090 already in use, skipping")
+else:
+    _PROM_ENABLED = False
+
+
+# --- 1c. MCP Client Manager ---
+
+class MCPClientManager:
+    """Manages connections to FastMCP remote servers over Streamable HTTP transport.
+    
+    Each MCP server is identified by a name (e.g., 'telemetry', 'compliance').
+    Connection URLs are configured via environment variables or model_config.yaml.
+    """
+    
+    # Default server URL map
+    DEFAULT_URLS = {
+        "telemetry": "http://localhost:8001/mcp",
+        "compliance": "http://localhost:8002/mcp",
+        "history": "http://localhost:8003/mcp",
+        "weather": "http://localhost:8004/mcp",
+        "port_services": "http://localhost:8005/mcp",
+    }
+    
+    # Environment variable overrides
+    ENV_MAP = {
+        "telemetry": "MCP_TELEMETRY_URL",
+        "compliance": "MCP_COMPLIANCE_URL",
+        "history": "MCP_HISTORY_URL",
+        "weather": "MCP_WEATHER_URL",
+        "port_services": "MCP_PORT_SERVICES_URL",
+    }
+    
+    def __init__(self):
+        self._urls: Dict[str, str] = {}
+        self._load_urls()
+    
+    def _load_urls(self):
+        """Load server URLs from config, environment, or defaults."""
+        mcp_cfg = _config.get("mcp_servers", {})
+        for name, default_url in self.DEFAULT_URLS.items():
+            # Priority: env var > yaml config > default
+            env_url = os.environ.get(self.ENV_MAP[name])
+            cfg_url = mcp_cfg.get(name, {}).get("url") if isinstance(mcp_cfg.get(name), dict) else None
+            self._urls[name] = env_url or cfg_url or default_url
+    
+    def get_url(self, server_name: str) -> str:
+        """Get the URL for a named MCP server."""
+        return self._urls.get(server_name, self.DEFAULT_URLS.get(server_name, ""))
+    
+    async def call_tool(self, server_name: str, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Call a tool on a remote FastMCP server.
+        
+        Args:
+            server_name: The MCP server identifier (e.g., 'telemetry', 'compliance')
+            tool_name: The tool function name on that server (e.g., 'get_machinery_telemetry')
+            arguments: Keyword arguments to pass to the tool
+        
+        Returns:
+            The tool's return value as a dict.
+        
+        Raises:
+            ConnectionError: If the MCP server is unreachable.
+            RuntimeError: If the tool call fails.
+        """
+        if not FASTMCP_AVAILABLE:
+            raise ImportError("fastmcp is not installed. Install with: pip install fastmcp")
+        
+        url = self.get_url(server_name)
+        logger.debug(f"MCP call: {server_name}/{tool_name} -> {url}")
+        
+        async with MCPClient(url) as client:
+            result = await client.call_tool(tool_name, arguments)
+            # FastMCP returns content as a list of content blocks; extract text
+            if hasattr(result, '__iter__'):
+                for item in result:
+                    if hasattr(item, 'text'):
+                        return json.loads(item.text)
+            return result
+
+
+# Global MCP client manager instance
+mcp_manager = MCPClientManager()
 
 
 # --- 2. Token & Cost Counters ---
@@ -152,10 +280,21 @@ async def call_llm_with_audit(
     
     latency_ms = int((time.perf_counter() - start) * 1000)
     
+    _model_cfg = _config.get("model", {})
+    cost_prompt = _model_cfg.get("cost_per_million_prompt_tokens", 2.5)
+    cost_completion = _model_cfg.get("cost_per_million_completion_tokens", 10.0)
+    
     prompt_str = (system_prompt or "") + "\n" + prompt
     prompt_tokens = count_tokens(prompt_str)
     completion_tokens = count_tokens(response_text)
-    cost = (prompt_tokens * 2.5 + completion_tokens * 10.0) / 1_000_000.0
+    cost = (prompt_tokens * cost_prompt + completion_tokens * cost_completion) / 1_000_000.0
+    
+    # Prometheus instrumentation
+    if _PROM_ENABLED:
+        LLM_CALL_COUNTER.labels(node_name=node_name).inc()
+        LLM_TOKEN_COUNTER.labels(token_type="prompt").inc(prompt_tokens)
+        LLM_TOKEN_COUNTER.labels(token_type="completion").inc(completion_tokens)
+        LLM_COST_COUNTER.inc(cost)
     
     audit_rec = {
         "agent_name": node_name,
@@ -204,6 +343,10 @@ async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, sta
         res = await coro_factory()
         latency_ms = int((time.perf_counter() - start) * 1000)
         
+        # Prometheus: record tool latency
+        if _PROM_ENABLED:
+            TOOL_LATENCY_HISTOGRAM.labels(tool_name=tool_name).observe(latency_ms / 1000.0)
+        
         # Store success experience in CEMG
         store_experience(
             driver=cemg_storage,
@@ -218,6 +361,12 @@ async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, sta
         return {"status": "success", "data": res, "latency_ms": latency_ms}
     except Exception as e:
         latency_ms = int((time.perf_counter() - start) * 1000)
+        
+        # Prometheus: record tool failure
+        if _PROM_ENABLED:
+            TOOL_LATENCY_HISTOGRAM.labels(tool_name=tool_name).observe(latency_ms / 1000.0)
+            CEMG_FAILURE_COUNTER.labels(tool_name=tool_name).inc()
+        
         # Store failure experience in CEMG
         store_experience(
             driver=cemg_storage,
@@ -234,34 +383,97 @@ async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, sta
         return {"status": "failed", "data": {"error": str(e)}, "latency_ms": latency_ms}
 
 
-# --- 6. Tool / MCP stubs ---
+# --- 6. Tool / MCP Functions ---
+#
+# When MCP_SERVERS_ENABLED=true, tools call remote FastMCP servers.
+# When false (default), they fall back to local mock/stub implementations.
+#
 
-async def run_telemetry(tenant_id: str, vessel_id: str, equipment_id: Optional[str]) -> Dict[str, Any]:
+# --- 6a. Local mock fallbacks (used when MCP is disabled) ---
+
+async def _mock_telemetry(tenant_id: str, vessel_id: str, equipment_id: Optional[str]) -> Dict[str, Any]:
     await asyncio.sleep(0.3)
     return {"equipment_id": equipment_id, "vibration_amplitude": 6.8, "frequency_band": "high",
             "gas_reading_pct_lel": 4.2}
 
 
-async def run_compliance(tenant_id: str, vessel_id: str) -> Dict[str, Any]:
+async def _mock_compliance(tenant_id: str, vessel_id: str) -> Dict[str, Any]:
     await asyncio.sleep(0.4)
     return {"rule_set": "DNV-GL-Part-4", "status": "Compliant"}
 
 
-async def run_historical_rag(equipment_id: Optional[str]) -> Dict[str, Any]:
+async def _mock_historical_rag(equipment_id: Optional[str]) -> Dict[str, Any]:
     if not equipment_id:
         return {"previous_logs": []}
     logs = await db.get_equipment_log_history(equipment_id)
     return {"previous_logs": logs}
 
 
-async def run_weather_voyage(vessel_id: str) -> Dict[str, Any]:
+async def _mock_weather_voyage(vessel_id: str) -> Dict[str, Any]:
     await asyncio.sleep(0.5)
     return {"wave_height_meters": 2.1, "wind_kn": 14}
 
 
-async def run_maps(vessel_id: str) -> Dict[str, Any]:
+async def _mock_maps(vessel_id: str) -> Dict[str, Any]:
     await asyncio.sleep(0.3)
     return {"nearest_port_services": ["bunkering", "spare parts depot"], "berth_eta_hint": "port context stub"}
+
+
+# --- 6b. MCP-backed tool functions ---
+
+async def run_telemetry(tenant_id: str, vessel_id: str, equipment_id: Optional[str]) -> Dict[str, Any]:
+    """Fetch machinery telemetry from the MCP telemetry server or local mock."""
+    if MCP_SERVERS_ENABLED:
+        return await mcp_manager.call_tool("telemetry", "get_machinery_telemetry", {
+            "vessel_id": vessel_id, "equipment_id": equipment_id or ""
+        })
+    return await _mock_telemetry(tenant_id, vessel_id, equipment_id)
+
+
+async def run_gas_hazard(vessel_id: str, equipment_id: str) -> Dict[str, Any]:
+    """Fetch gas hazard status from MCP telemetry server (ATEX checks)."""
+    if MCP_SERVERS_ENABLED:
+        return await mcp_manager.call_tool("telemetry", "get_gas_hazard_status", {
+            "vessel_id": vessel_id, "equipment_id": equipment_id
+        })
+    # Fallback: use the general telemetry mock which includes gas_reading_pct_lel
+    return await _mock_telemetry("", vessel_id, equipment_id)
+
+
+async def run_compliance(tenant_id: str, vessel_id: str) -> Dict[str, Any]:
+    """Verify class compliance via MCP compliance server or local mock."""
+    if MCP_SERVERS_ENABLED:
+        return await mcp_manager.call_tool("compliance", "verify_class_compliance", {
+            "vessel_id": vessel_id, "system_category": "rotating_machinery"
+        })
+    return await _mock_compliance(tenant_id, vessel_id)
+
+
+async def run_historical_rag(equipment_id: Optional[str]) -> Dict[str, Any]:
+    """Retrieve equipment maintenance history via MCP history server or local DB."""
+    if MCP_SERVERS_ENABLED and equipment_id:
+        return await mcp_manager.call_tool("history", "get_equipment_history", {
+            "equipment_id": equipment_id, "limit": 10
+        })
+    return await _mock_historical_rag(equipment_id)
+
+
+async def run_weather_voyage(vessel_id: str) -> Dict[str, Any]:
+    """Get marine weather conditions via MCP weather server or local mock."""
+    if MCP_SERVERS_ENABLED:
+        return await mcp_manager.call_tool("weather", "get_marine_weather", {
+            "vessel_id": vessel_id
+        })
+    return await _mock_weather_voyage(vessel_id)
+
+
+async def run_maps(vessel_id: str) -> Dict[str, Any]:
+    """Get port services data via MCP port services server or local mock."""
+    if MCP_SERVERS_ENABLED:
+        return await mcp_manager.call_tool("port_services", "get_port_services", {
+            "vessel_id": vessel_id
+        })
+    return await _mock_maps(vessel_id)
 
 
 # --- 7. Nodes ---
@@ -270,8 +482,18 @@ async def input_guardrail_node(state: AgentState) -> Dict[str, Any]:
     query = state["user_query"].lower()
     violation = None
     
-    if any(keyword in query for keyword in ("bypass safety", "override gas sensor", "ignore atex", "force override")):
+    # Load bypass keywords from config or use defaults
+    bypass_keywords = _config.get("guardrails", {}).get("input", {}).get(
+        "bypass_keywords", ["override", "bypass", "disable safety", "force", "ignore protocol"]
+    )
+    trigger_phrases = ["bypass safety", "override gas sensor", "ignore atex", "force override"] + [
+        kw.lower() for kw in bypass_keywords
+    ]
+    
+    if any(keyword in query for keyword in trigger_phrases):
         violation = "Safety override attempt blocked. Operations cannot be bypassed or forced without ATEX validation."
+        if _PROM_ENABLED:
+            GUARDRAIL_BLOCK_COUNTER.labels(guardrail_type="input").inc()
         
     return {"guardrail_violation": violation, "audit_records": []}
 
@@ -336,7 +558,16 @@ async def atex_hazard_check_node(state: AgentState) -> Dict[str, Any]:
     if not equipment or not equipment.get("is_atex_zone"):
         return {"atex_alert": None}
 
-    reading = await run_telemetry(state["tenant_id"], state["vessel_id"], equipment["id"])
+    # Use dedicated gas hazard tool for ATEX checks when MCP is enabled
+    if MCP_SERVERS_ENABLED:
+        try:
+            reading = await run_gas_hazard(state["vessel_id"], equipment["id"])
+        except Exception:
+            # Fallback to general telemetry if gas-specific endpoint fails
+            reading = await run_telemetry(state["tenant_id"], state["vessel_id"], equipment["id"])
+    else:
+        reading = await run_telemetry(state["tenant_id"], state["vessel_id"], equipment["id"])
+    
     lel_pct = reading.get("gas_reading_pct_lel", 0.0)
 
     if lel_pct >= ATEX_CRITICAL_THRESHOLD:
@@ -345,6 +576,10 @@ async def atex_hazard_check_node(state: AgentState) -> Dict[str, Any]:
         severity = "warning"
     else:
         severity = "advisory"
+
+    # Prometheus: track ATEX alert
+    if _PROM_ENABLED and severity in ("warning", "critical"):
+        ATEX_ALERT_COUNTER.labels(severity=severity).inc()
 
     alert = {
         "equipment_id": equipment["id"],

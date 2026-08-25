@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  copilot-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mcp-telemetry
+      - mcp-compliance
+      - mcp-history
+      - mcp-weather
+      - mcp-port-services
+    env_file:
+      - .env
+    networks:
+      - mcp-net
+
+  mcp-telemetry:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+      args:
+        SERVER_MODULE: telemetry_server
+        SERVER_PORT: 8001
+    ports:
+      - "8001:8001"
+    networks:
+      - mcp-net
+
+  mcp-compliance:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+      args:
+        SERVER_MODULE: compliance_server
+        SERVER_PORT: 8002
+    ports:
+      - "8002:8002"
+    networks:
+      - mcp-net
+
+  mcp-history:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+      args:
+        SERVER_MODULE: history_server
+        SERVER_PORT: 8003
+    ports:
+      - "8003:8003"
+    networks:
+      - mcp-net
+    volumes:
+      - db-data:/app/data
+
+  mcp-weather:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+      args:
+        SERVER_MODULE: weather_server
+        SERVER_PORT: 8004
+    ports:
+      - "8004:8004"
+    networks:
+      - mcp-net
+
+  mcp-port-services:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+      args:
+        SERVER_MODULE: port_services_server
+        SERVER_PORT: 8005
+    ports:
+      - "8005:8005"
+    networks:
+      - mcp-net
+
+networks:
+  mcp-net:
+    driver: bridge
+
+volumes:
+  db-data:

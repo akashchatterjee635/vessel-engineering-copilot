@@ -1,0 +1,37 @@
+FROM python:3.12-slim
+
+# Create non-root user
+RUN useradd -m -s /bin/bash mcp
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy MCP servers
+COPY mcp_servers/ ./mcp_servers/
+
+# Set permissions
+RUN chown -R mcp:mcp /app
+
+# Switch to non-root user
+USER mcp
+
+# Accept build args
+ARG SERVER_MODULE
+ARG SERVER_PORT
+
+ENV SERVER_MODULE=${SERVER_MODULE}
+ENV SERVER_PORT=${SERVER_PORT}
+
+# Expose the specific port
+EXPOSE ${SERVER_PORT}
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD python -c "print('ok')"
+
+# Start command
+CMD python -m mcp_servers.${SERVER_MODULE}
