@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   copilot-app:
     build:
@@ -13,8 +11,17 @@ services:
       - mcp-history
       - mcp-weather
       - mcp-port-services
-    env_file:
-      - .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-test-dummy}
+      - VESSEL_COPILOT_DB=${VESSEL_COPILOT_DB:-vessel_copilot.db}
+      - VESSEL_COPILOT_MODEL=${VESSEL_COPILOT_MODEL:-gpt-5.4-nano}
+      - MCP_SERVERS_ENABLED=true
+      - MCP_TELEMETRY_URL=http://mcp-telemetry:8001/mcp
+      - MCP_COMPLIANCE_URL=http://mcp-compliance:8002/mcp
+      - MCP_HISTORY_URL=http://mcp-history:8003/mcp
+      - MCP_WEATHER_URL=http://mcp-weather:8004/mcp
+      - MCP_PORT_SERVICES_URL=http://mcp-port-services:8005/mcp
+      - MODEL_CONFIG_PATH=mlops/model_config.yaml
     networks:
       - mcp-net
 
