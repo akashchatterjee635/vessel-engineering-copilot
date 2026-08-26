@@ -44,11 +44,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ["VESSEL_COPILOT_DB"] = os.path.join(ROOT, "test_vessel_copilot.db")
 os.environ["VESSEL_COPILOT_CHECKPOINTS_DB"] = os.path.join(ROOT, "test_vessel_checkpoints_real.db")
 os.environ["MODEL_CONFIG_PATH"] = os.path.join(ROOT, "mlops", "model_config.yaml")
+os.environ["CEMG_SQLITE_PATH"] = os.path.join(ROOT, "cemg_memory.db")
 model = os.environ.get("VESSEL_COPILOT_MODEL", "gpt-5.4-mini")
 
 print(f"Using model: {model}")
 print(f"API key: {api_key[:8]}...{api_key[-4:]}")
 print()
+
+# Initialize CEMG database tables before importing graph
+# (seed.py deletes cemg_memory.db, and SqliteStorage doesn't auto-create on __init__)
+try:
+    from cemg.storage import SqliteStorage as _CemgStorage
+
+    _cs = _CemgStorage(db_path=os.environ["CEMG_SQLITE_PATH"])
+    _cs._init_db()
+    print("CEMG database initialized.")
+except Exception as e:
+    print(f"CEMG init skipped (fallback will be used): {e}")
 
 import graph as g
 
@@ -96,10 +108,20 @@ async def run_scenario(name: str, query: str, resume: bool = False):
 async def main():
     # Seed the DB first
     print("Seeding test database...")
-    import subprocess
+    import seed
 
-    seed_script = os.path.join(ROOT, "tests", "seed.py")
-    subprocess.run([sys.executable, seed_script], cwd=ROOT, check=True)
+    seed.seed()
+
+    # Initialize CEMG database tables after seed.py deletes them
+    try:
+        from cemg.storage import SqliteStorage as _CemgStorage
+
+        _cs = _CemgStorage(db_path=os.environ["CEMG_SQLITE_PATH"])
+        _cs._init_db()
+        print("CEMG database initialized (post-seed).")
+    except Exception as e:
+        print(f"CEMG init skipped (fallback will be used): {e}")
+
     print()
 
     # Scenario 1: Simple informational (cheapest — short prompt, short answer)

@@ -93,29 +93,8 @@ cemg_storage = SqliteStorage(db_path=CEMG_DB_PATH)
 
 
 # --- 1b. Prometheus Metrics ---
-if PROMETHEUS_AVAILABLE and _config.get("feature_flags", {}).get("prometheus_enabled", False):
-    LLM_CALL_COUNTER = Counter("copilot_llm_calls_total", "Total LLM API invocations", ["node_name"])
-    LLM_TOKEN_COUNTER = Counter("copilot_llm_tokens_total", "Total LLM tokens consumed", ["token_type"])
-    LLM_COST_COUNTER = Counter("copilot_llm_cost_dollars", "Estimated LLM API cost in USD")
-    TOOL_LATENCY_HISTOGRAM = Histogram(
-        "copilot_tool_latency_seconds",
-        "MCP tool execution latency",
-        ["tool_name"],
-        buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
-    )
-    GUARDRAIL_BLOCK_COUNTER = Counter("copilot_guardrail_blocks_total", "Total guardrail blocks", ["guardrail_type"])
-    ATEX_ALERT_COUNTER = Counter("copilot_atex_alerts_total", "Total ATEX alerts raised", ["severity"])
-    CEMG_FAILURE_COUNTER = Counter("copilot_cemg_failures_total", "Tools blocked or failed via CEMG", ["tool_name"])
-    ACTIVE_THREADS_GAUGE = Gauge("copilot_active_threads", "Number of active conversation threads")
-    _PROM_ENABLED = True
-    # Start Prometheus metrics HTTP server on port 9090
-    try:
-        prom_start(9090)
-        logger.info("Prometheus metrics server started on :9090")
-    except OSError:
-        logger.warning("Prometheus metrics port 9090 already in use, skipping")
-else:
-    _PROM_ENABLED = False
+# (Removed per user request)
+_PROM_ENABLED = False
 
 
 # --- 1c. MCP Client Manager ---
@@ -124,26 +103,18 @@ else:
 class MCPClientManager:
     """Manages connections to FastMCP remote servers over Streamable HTTP transport.
 
-    Each MCP server is identified by a name (e.g., 'telemetry', 'compliance').
+    Each MCP server is identified by a name (e.g., 'telemetry').
     Connection URLs are configured via environment variables or model_config.yaml.
     """
 
     # Default server URL map
     DEFAULT_URLS = {
         "telemetry": "http://localhost:8001/mcp",
-        "compliance": "http://localhost:8002/mcp",
-        "history": "http://localhost:8003/mcp",
-        "weather": "http://localhost:8004/mcp",
-        "port_services": "http://localhost:8005/mcp",
     }
 
     # Environment variable overrides
     ENV_MAP = {
         "telemetry": "MCP_TELEMETRY_URL",
-        "compliance": "MCP_COMPLIANCE_URL",
-        "history": "MCP_HISTORY_URL",
-        "weather": "MCP_WEATHER_URL",
-        "port_services": "MCP_PORT_SERVICES_URL",
     }
 
     def __init__(self):
@@ -320,13 +291,6 @@ async def call_llm_with_audit(
     completion_tokens = count_tokens(response_text)
     cost = (prompt_tokens * cost_prompt + completion_tokens * cost_completion) / 1_000_000.0
 
-    # Prometheus instrumentation
-    if _PROM_ENABLED:
-        LLM_CALL_COUNTER.labels(node_name=node_name).inc()
-        LLM_TOKEN_COUNTER.labels(token_type="prompt").inc(prompt_tokens)
-        LLM_TOKEN_COUNTER.labels(token_type="completion").inc(completion_tokens)
-        LLM_COST_COUNTER.inc(cost)
-
     audit_rec = {
         "agent_name": node_name,
         "gate_fired": 1,
@@ -383,10 +347,6 @@ async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, sta
         res = await coro_factory()
         latency_ms = int((time.perf_counter() - start) * 1000)
 
-        # Prometheus: record tool latency
-        if _PROM_ENABLED:
-            TOOL_LATENCY_HISTOGRAM.labels(tool_name=tool_name).observe(latency_ms / 1000.0)
-
         # Store success experience in CEMG
         store_experience(
             driver=cemg_storage,
@@ -401,11 +361,6 @@ async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, sta
         return {"status": "success", "data": res, "latency_ms": latency_ms}
     except Exception as e:
         latency_ms = int((time.perf_counter() - start) * 1000)
-
-        # Prometheus: record tool failure
-        if _PROM_ENABLED:
-            TOOL_LATENCY_HISTOGRAM.labels(tool_name=tool_name).observe(latency_ms / 1000.0)
-            CEMG_FAILURE_COUNTER.labels(tool_name=tool_name).inc()
 
         # Store failure experience in CEMG
         store_experience(
@@ -494,38 +449,22 @@ async def run_gas_hazard(vessel_id: str, equipment_id: str) -> dict[str, Any]:
 
 
 async def run_compliance(tenant_id: str, vessel_id: str) -> dict[str, Any]:
-    """Verify class compliance via MCP compliance server or local mock."""
-    if MCP_SERVERS_ENABLED:
-        return await mcp_manager.call_tool(
-            "compliance",
-            "verify_class_compliance",
-            {"vessel_id": vessel_id, "system_category": "rotating_machinery"},
-        )
+    """Verify class compliance via local mock."""
     return await _mock_compliance(tenant_id, vessel_id)
 
 
 async def run_historical_rag(equipment_id: str | None) -> dict[str, Any]:
-    """Retrieve equipment maintenance history via MCP history server or local DB."""
-    if MCP_SERVERS_ENABLED and equipment_id:
-        return await mcp_manager.call_tool(
-            "history",
-            "get_equipment_history",
-            {"equipment_id": equipment_id, "limit": 10},
-        )
+    """Retrieve equipment maintenance history via local DB."""
     return await _mock_historical_rag(equipment_id)
 
 
 async def run_weather_voyage(vessel_id: str) -> dict[str, Any]:
-    """Get marine weather conditions via MCP weather server or local mock."""
-    if MCP_SERVERS_ENABLED:
-        return await mcp_manager.call_tool("weather", "get_marine_weather", {"vessel_id": vessel_id})
+    """Get marine weather conditions via local mock."""
     return await _mock_weather_voyage(vessel_id)
 
 
 async def run_maps(vessel_id: str) -> dict[str, Any]:
-    """Get port services data via MCP port services server or local mock."""
-    if MCP_SERVERS_ENABLED:
-        return await mcp_manager.call_tool("port_services", "get_port_services", {"vessel_id": vessel_id})
+    """Get port services data via local mock."""
     return await _mock_maps(vessel_id)
 
 
@@ -554,8 +493,6 @@ async def input_guardrail_node(state: AgentState) -> dict[str, Any]:
 
     if any(keyword in query for keyword in trigger_phrases):
         violation = "Safety override attempt blocked. Operations cannot be bypassed or forced without ATEX validation."
-        if _PROM_ENABLED:
-            GUARDRAIL_BLOCK_COUNTER.labels(guardrail_type="input").inc()
 
     return {"guardrail_violation": violation, "audit_records": []}
 
@@ -638,10 +575,6 @@ async def atex_hazard_check_node(state: AgentState) -> dict[str, Any]:
         severity = "warning"
     else:
         severity = "advisory"
-
-    # Prometheus: track ATEX alert
-    if _PROM_ENABLED and severity in ("warning", "critical"):
-        ATEX_ALERT_COUNTER.labels(severity=severity).inc()
 
     alert = {
         "equipment_id": equipment["id"],
