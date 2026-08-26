@@ -6,4 +6,3 @@ __pycache__/
 .git/
 .env
 tests/
-mlops/
