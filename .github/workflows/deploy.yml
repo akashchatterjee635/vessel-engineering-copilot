@@ -1,21 +1,24 @@
 name: Deploy
 
 on:
-  push:
-    branches: [ master ]
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches: [master]
   workflow_dispatch:
 
 jobs:
   deploy-local:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v4
       - name: Start services
-        run: docker-compose up -d
-      - name: Wait for health checks
+        run: docker compose up --build -d
+      - name: Wait for services to initialize
         run: sleep 10
-      - name: Smoke test
-        run: |
-          curl -f http://localhost:8000/metrics || echo "copilot-app health failed"
       - name: Print service status
-        run: docker-compose ps
+        run: docker compose ps
+      - name: Stop services
+        run: docker compose down

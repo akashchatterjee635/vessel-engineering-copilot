@@ -1,7 +1,8 @@
-import sqlite3
 import os
+import sqlite3
 
 DB_PATH = os.environ.get("VESSEL_COPILOT_DB", "test_vessel_copilot.db")
+
 
 def print_audit_report():
     if not os.path.exists(DB_PATH):
@@ -10,11 +11,11 @@ def print_audit_report():
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    
+
     print("=" * 60)
     print("               LLMOps AUDIT & PERFORMANCE REPORT")
     print("=" * 60)
-    
+
     # 1. Total token counts and cost estimation
     cur = conn.execute("""
         SELECT 
@@ -31,7 +32,7 @@ def print_audit_report():
         total_completion = row["total_completion_tokens"] or 0
         total_cost = row["total_cost"] or 0.0
         total_calls = row["total_calls"]
-        print(f"LLM API Telemetry Metrics:")
+        print("LLM API Telemetry Metrics:")
         print(f"  Total LLM Invocations:       {total_calls}")
         print(f"  Total Prompt Tokens:         {total_prompt}")
         print(f"  Total Completion Tokens:     {total_completion}")
@@ -39,9 +40,9 @@ def print_audit_report():
         print(f"  Total Estimated Cost (USD):  ${total_cost:.5f}")
     else:
         print("No LLM API calls recorded in audit.")
-        
+
     print("-" * 60)
-    
+
     # 2. Node Latency Metrics
     print("Latency Metrics by Node / Agent:")
     cur = conn.execute("""
@@ -60,9 +61,9 @@ def print_audit_report():
         print(f"    Invocations: {r['occurrences']}")
         print(f"    Avg Latency: {r['avg_latency_ms']:.1f} ms")
         print(f"    Max Latency: {r['max_latency_ms']} ms")
-        
+
     print("-" * 60)
-    
+
     # 3. Triage / Routing Efficiency Gating
     # Firing efficiency: what percentage of tools requested by the Triage Router were actually used in final Synthesis
     # Let's count how many times gate_fired was 1, and how many times is_used_by_synthesis was 1.
@@ -88,9 +89,10 @@ def print_audit_report():
             print(f"    Utilization Efficiency:     {efficiency:.1f}%")
     else:
         print("No tool call routing data found.")
-        
+
     print("=" * 60)
     conn.close()
+
 
 if __name__ == "__main__":
     print_audit_report()

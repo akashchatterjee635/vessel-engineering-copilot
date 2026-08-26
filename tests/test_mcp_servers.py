@@ -12,17 +12,15 @@ Usage:
     pytest tests/test_mcp_servers.py -v
 """
 
-import asyncio
 import json
 import os
-import sys
+
 import pytest
 
 # Skip entire module if fastmcp is not installed
 pytest.importorskip("fastmcp")
 
 from fastmcp import Client as MCPClient
-
 
 # --- Server URL configuration ---
 MCP_TELEMETRY_URL = os.environ.get("MCP_TELEMETRY_URL", "http://localhost:8001/mcp")
@@ -40,12 +38,13 @@ async def call_mcp_tool(url: str, tool_name: str, arguments: dict) -> dict:
     async with MCPClient(url) as client:
         result = await client.call_tool(tool_name, arguments)
         for item in result:
-            if hasattr(item, 'text'):
+            if hasattr(item, "text"):
                 return json.loads(item.text)
         return {}
 
 
 # --- Telemetry Server Tests ---
+
 
 @skip_unless_live
 class TestTelemetryServer:
@@ -57,9 +56,11 @@ class TestTelemetryServer:
 
     @pytest.mark.asyncio
     async def test_get_machinery_telemetry(self):
-        result = await call_mcp_tool(MCP_TELEMETRY_URL, "get_machinery_telemetry", {
-            "vessel_id": "vessel-001", "equipment_id": "equip-aux-pump-001"
-        })
+        result = await call_mcp_tool(
+            MCP_TELEMETRY_URL,
+            "get_machinery_telemetry",
+            {"vessel_id": "vessel-001", "equipment_id": "equip-aux-pump-001"},
+        )
         assert "vibration_amplitude" in result
         assert 0.0 <= result["vibration_amplitude"] <= 15.0
         assert result["frequency_band"] in ("low", "mid", "high")
@@ -68,9 +69,11 @@ class TestTelemetryServer:
 
     @pytest.mark.asyncio
     async def test_get_gas_hazard_status(self):
-        result = await call_mcp_tool(MCP_TELEMETRY_URL, "get_gas_hazard_status", {
-            "vessel_id": "vessel-001", "equipment_id": "equip-cargo-pump-001"
-        })
+        result = await call_mcp_tool(
+            MCP_TELEMETRY_URL,
+            "get_gas_hazard_status",
+            {"vessel_id": "vessel-001", "equipment_id": "equip-cargo-pump-001"},
+        )
         assert "gas_reading_pct_lel" in result
         assert 0.0 <= result["gas_reading_pct_lel"] <= 35.0
         assert "h2s_ppm" in result
@@ -78,6 +81,7 @@ class TestTelemetryServer:
 
 
 # --- Compliance Server Tests ---
+
 
 @skip_unless_live
 class TestComplianceServer:
@@ -88,23 +92,28 @@ class TestComplianceServer:
 
     @pytest.mark.asyncio
     async def test_verify_class_compliance(self):
-        result = await call_mcp_tool(MCP_COMPLIANCE_URL, "verify_class_compliance", {
-            "vessel_id": "vessel-001", "system_category": "rotating_machinery"
-        })
+        result = await call_mcp_tool(
+            MCP_COMPLIANCE_URL,
+            "verify_class_compliance",
+            {"vessel_id": "vessel-001", "system_category": "rotating_machinery"},
+        )
         assert "status" in result
         assert result["status"] in ("Compliant", "Non-Compliant", "Conditional")
         assert "rule_reference" in result
 
     @pytest.mark.asyncio
     async def test_get_regulatory_requirements(self):
-        result = await call_mcp_tool(MCP_COMPLIANCE_URL, "get_regulatory_requirements", {
-            "vessel_class": "Aframax", "zone_class": "Zone 1"
-        })
+        result = await call_mcp_tool(
+            MCP_COMPLIANCE_URL,
+            "get_regulatory_requirements",
+            {"vessel_class": "Aframax", "zone_class": "Zone 1"},
+        )
         assert "atex_directive" in result
         assert "equipment_certifications" in result
 
 
 # --- History Server Tests ---
+
 
 @skip_unless_live
 class TestHistoryServer:
@@ -115,21 +124,29 @@ class TestHistoryServer:
 
     @pytest.mark.asyncio
     async def test_get_equipment_history(self):
-        result = await call_mcp_tool(MCP_HISTORY_URL, "get_equipment_history", {
-            "equipment_id": "equip-aux-pump-001", "limit": 5
-        })
+        result = await call_mcp_tool(
+            MCP_HISTORY_URL,
+            "get_equipment_history",
+            {"equipment_id": "equip-aux-pump-001", "limit": 5},
+        )
         assert "logs" in result or "previous_logs" in result
 
     @pytest.mark.asyncio
     async def test_search_manuals(self):
-        result = await call_mcp_tool(MCP_HISTORY_URL, "search_manuals", {
-            "vessel_class": "Aframax", "equipment_id": "equip-aux-pump-001",
-            "query": "grinding noise pump vibration"
-        })
+        result = await call_mcp_tool(
+            MCP_HISTORY_URL,
+            "search_manuals",
+            {
+                "vessel_class": "Aframax",
+                "equipment_id": "equip-aux-pump-001",
+                "query": "grinding noise pump vibration",
+            },
+        )
         assert "documents" in result or "results" in result
 
 
 # --- Weather Server Tests ---
+
 
 @skip_unless_live
 class TestWeatherServer:
@@ -140,9 +157,7 @@ class TestWeatherServer:
 
     @pytest.mark.asyncio
     async def test_get_marine_weather(self):
-        result = await call_mcp_tool(MCP_WEATHER_URL, "get_marine_weather", {
-            "vessel_id": "vessel-001"
-        })
+        result = await call_mcp_tool(MCP_WEATHER_URL, "get_marine_weather", {"vessel_id": "vessel-001"})
         assert "wave_height_meters" in result
         assert "wind_speed_knots" in result
         assert "sea_state" in result
@@ -150,14 +165,13 @@ class TestWeatherServer:
 
     @pytest.mark.asyncio
     async def test_get_voyage_conditions(self):
-        result = await call_mcp_tool(MCP_WEATHER_URL, "get_voyage_conditions", {
-            "vessel_id": "vessel-001"
-        })
+        result = await call_mcp_tool(MCP_WEATHER_URL, "get_voyage_conditions", {"vessel_id": "vessel-001"})
         assert "current_speed_knots" in result
         assert "heading" in result
 
 
 # --- Port Services Server Tests ---
+
 
 @skip_unless_live
 class TestPortServicesServer:
@@ -168,15 +182,11 @@ class TestPortServicesServer:
 
     @pytest.mark.asyncio
     async def test_get_port_services(self):
-        result = await call_mcp_tool(MCP_PORT_SERVICES_URL, "get_port_services", {
-            "vessel_id": "vessel-001"
-        })
+        result = await call_mcp_tool(MCP_PORT_SERVICES_URL, "get_port_services", {"vessel_id": "vessel-001"})
         assert "port_name" in result
         assert "available_services" in result
 
     @pytest.mark.asyncio
     async def test_get_berth_availability(self):
-        result = await call_mcp_tool(MCP_PORT_SERVICES_URL, "get_berth_availability", {
-            "port_code": "NLRTM"
-        })
+        result = await call_mcp_tool(MCP_PORT_SERVICES_URL, "get_berth_availability", {"port_code": "NLRTM"})
         assert "berths" in result or "berth_slots" in result

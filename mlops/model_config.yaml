@@ -1,5 +1,5 @@
 model:
-  name: gpt-4.1
+  name: gpt-5.4-nano
   temperature: 0
   max_tokens: 4096
   cost_per_million_prompt_tokens: 2.50
