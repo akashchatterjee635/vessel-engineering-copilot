@@ -11,6 +11,20 @@ os.environ["CEMG_SQLITE_PATH"] = "cemg_memory.db"
 
 st.set_page_config(page_title="Vessel Engineering Copilot", page_icon="🚢", layout="wide")
 
+# Handle Streamlit Cloud Secrets
+if "OPENAI_API_KEY" in st.secrets:
+    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+
+# Auto-seed the database if it doesn't exist (useful for Streamlit Cloud)
+if not os.path.exists("test_vessel_copilot.db"):
+    try:
+        import sys
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'tests'))
+        import seed
+        seed.seed()
+    except Exception as e:
+        st.error(f"Failed to seed database: {e}")
+
 try:
     from cemg.storage import SqliteStorage
     _cs = SqliteStorage(db_path=os.environ["CEMG_SQLITE_PATH"])
