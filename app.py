@@ -93,7 +93,14 @@ def render_telemetry_dashboard():
     vib2 = aux_telemetry.get("vibration_amplitude", 2.1)
     st.sidebar.metric("Vibration (mm/s)", f"{vib2:.1f}")
 
-
+    st.sidebar.divider()
+    
+    if st.sidebar.button("🔄 New Session / Reset"):
+        st.session_state.thread_id = str(uuid.uuid4())
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Welcome to the MT Test Voyager Engineering Copilot. How can I assist you today?"}
+        ]
+        st.rerun()
 def main():
     render_telemetry_dashboard()
 
