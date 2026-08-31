@@ -112,19 +112,22 @@ def main():
             with st.spinner("Processing..."):
                 cfg = {"configurable": {"thread_id": st.session_state.thread_id}}
                 state = {**COMMON_STATE, "thread_id": st.session_state.thread_id, "user_query": prompt}
-
+                
+                async def _run_graph():
+                    # Run graph in a single event loop to prevent lock errors
+                    res = await g.app.ainvoke(state, config=cfg)
+                    # Handle HITL pause (ActionAgent interrupt)
+                    if res is None or not res.get("final_synthesis"):
+                        res = await g.app.ainvoke(None, config=cfg)
+                    return res
+                
                 try:
-                    result = asyncio.run(g.app.ainvoke(state, config=cfg))
-
-                    # Handle HITL
-                    if result is None or not result.get("final_synthesis"):
-                        result = asyncio.run(g.app.ainvoke(None, config=cfg))
-
+                    result = asyncio.run(_run_graph())
+                    
                     synthesis = result.get("final_synthesis", {}).get("evaluation", "")
-
                     if not synthesis and result.get("logbook_result"):
                         synthesis = "Logbook entry successfully recorded."
-
+                        
                 except Exception as e:
                     synthesis = f"Error processing query: {str(e)}"
                     result = {}

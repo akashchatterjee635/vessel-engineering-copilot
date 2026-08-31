@@ -1098,9 +1098,12 @@ class LazyCompiledGraph:
         self._compiled_app = None
         self._conn = None
         self._saver = None
+        self._loop = None
 
     async def _ensure_compiled(self):
-        if self._compiled_app is None:
+        current_loop = asyncio.get_running_loop()
+        if self._compiled_app is None or self._loop is not current_loop:
+            self._loop = current_loop
             import aiosqlite
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
