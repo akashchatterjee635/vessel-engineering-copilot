@@ -110,6 +110,43 @@ def main():
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
+    cfg = {"configurable": {"thread_id": st.session_state.thread_id}}
+
+    async def _check_status():
+        try:
+            return await g.app.aget_state(cfg)
+        except Exception:
+            return None
+            
+    graph_state = asyncio.run(_check_status())
+    is_paused = graph_state and graph_state.next and "ActionAgent" in graph_state.next
+    
+    if is_paused:
+        st.warning("⏸ **WORK ORDER APPROVAL REQUIRED**")
+        st.info("The system has proposed creating a work order. Please review the recommendation above and approve or reject it.")
+        
+        col1, col2 = st.columns(2)
+        if col1.button("✅ Approve Work Order", use_container_width=True):
+            async def _approve():
+                await g.app.aupdate_state(cfg, {"triage_decision": {**graph_state.values["triage_decision"], "human_approval": "approved"}})
+                return await g.app.ainvoke(None, config=cfg)
+            with st.spinner("Executing..."):
+                res = asyncio.run(_approve())
+            st.session_state.messages.append({"role": "assistant", "content": "✅ **Work Order Approved and Executed.**"})
+            st.rerun()
+            
+        if col2.button("❌ Reject", type="primary", use_container_width=True):
+            async def _reject():
+                await g.app.aupdate_state(cfg, {"triage_decision": {**graph_state.values["triage_decision"], "human_approval": "rejected"}})
+                return await g.app.ainvoke(None, config=cfg)
+            with st.spinner("Canceling..."):
+                res = asyncio.run(_reject())
+            reason = res.get("action_rejection_reason", "Human rejected work order.")
+            st.session_state.messages.append({"role": "assistant", "content": f"❌ **Work Order Rejected.** No action was taken. ({reason})"})
+            st.rerun()
+            
+        return # Block chat input while approval is pending
+
     if prompt := st.chat_input("Ask a question or log an entry..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -117,19 +154,24 @@ def main():
 
         with st.chat_message("assistant"):
             with st.spinner("Processing..."):
-                cfg = {"configurable": {"thread_id": st.session_state.thread_id}}
                 state = {**COMMON_STATE, "thread_id": st.session_state.thread_id, "user_query": prompt}
                 
                 async def _run_graph():
                     # Run graph in a single event loop to prevent lock errors
-                    res = await g.app.ainvoke(state, config=cfg)
-                    # Handle HITL pause (ActionAgent interrupt)
-                    if res is None or not res.get("final_synthesis"):
-                        res = await g.app.ainvoke(None, config=cfg)
-                    return res
+                    return await g.app.ainvoke(state, config=cfg)
                 
                 try:
                     result = asyncio.run(_run_graph())
+                    
+                    # If it paused immediately on this turn (e.g., ActionAgent), don't process final_synthesis yet
+                    # We will re-render and hit the `is_paused` block above
+                    new_graph_state = asyncio.run(_check_status())
+                    if new_graph_state and new_graph_state.next and "ActionAgent" in new_graph_state.next:
+                        synthesis = result.get("final_synthesis", {}).get("evaluation", "")
+                        if synthesis:
+                            st.markdown(synthesis)
+                            st.session_state.messages.append({"role": "assistant", "content": synthesis})
+                        st.rerun()
                     
                     synthesis = result.get("final_synthesis", {}).get("evaluation", "")
                     if not synthesis and result.get("logbook_result"):
@@ -144,7 +186,6 @@ def main():
 
                 with st.expander("Diagnostic Trace"):
                     st.json(result.get("triage_decision", {}))
-
 
 if __name__ == "__main__":
     main()

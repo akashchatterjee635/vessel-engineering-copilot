@@ -562,12 +562,24 @@ async def atex_hazard_check_node(state: AgentState) -> dict[str, Any]:
         try:
             reading = await run_gas_hazard(state["vessel_id"], equipment["id"])
         except Exception:
-            # Fallback to general telemetry if gas-specific endpoint fails
-            reading = await run_telemetry(state["tenant_id"], state["vessel_id"], equipment["id"])
+            reading = None
     else:
-        reading = await run_telemetry(state["tenant_id"], state["vessel_id"], equipment["id"])
+        try:
+            reading = await run_telemetry(state["tenant_id"], state["vessel_id"], equipment["id"])
+        except Exception:
+            reading = None
 
-    lel_pct = reading.get("gas_reading_pct_lel", 0.0)
+    if reading is None or "gas_reading_pct_lel" not in reading:
+        # FAIL-SAFE SEMANTICS: Unknown gas reading in ATEX zone is critical
+        state["guardrail_violation"] = True
+        state["final_synthesis"] = {
+            "response": "⚠️ **CRITICAL SAFETY GUARDRAIL TRIGGERED**\n\nUnable to retrieve valid gas telemetry for ATEX-zoned equipment. You must physically verify gas levels with a portable multi-gas detector before proceeding with any operational guidance.",
+            "evaluation": "⚠️ **CRITICAL SAFETY GUARDRAIL TRIGGERED**\n\nUnable to retrieve valid gas telemetry for ATEX-zoned equipment. You must physically verify gas levels with a portable multi-gas detector before proceeding with any operational guidance.",
+            "needs_action": False,
+        }
+        return state
+
+    lel_pct = reading.get("gas_reading_pct_lel")
 
     if lel_pct >= ATEX_CRITICAL_THRESHOLD:
         severity = "critical"
@@ -933,9 +945,31 @@ async def checklist_agent_node(state: AgentState) -> dict[str, Any]:
 
 async def action_agent(state: AgentState) -> dict[str, Any]:
     decision = state["triage_decision"]
-    warranted = decision["urgency"] in ("elevated", "urgent") and not state.get("guardrail_violation")
+    equipment = state.get("equipment_record")
+    
+    # POINT 2 FIX: Deterministic Action-Policy Layer
+    warranted = False
+    rejection_reason = None
+
+    if decision.get("human_approval") == "rejected":
+        warranted = False
+        rejection_reason = "Human rejected work order."
+    elif state.get("guardrail_violation"):
+        warranted = False
+        rejection_reason = "Guardrail violation active."
+    elif not equipment:
+        warranted = False
+        rejection_reason = "Equipment unresolved."
+    elif equipment.get("is_atex_zone") == 1:
+        warranted = False
+        rejection_reason = "ATEX zone machinery requires manual offline review, never automatic."
+    elif decision["confidence"] < 0.8:
+        warranted = False
+        rejection_reason = f"Triage confidence too low ({decision['confidence']} < 0.8)."
+    elif decision["urgency"] in ("elevated", "urgent"):
+        warranted = True
+
     if warranted:
-        equipment = state.get("equipment_record")
         async with aiosqlite.connect(DB_PATH) as conn:
             await conn.execute(
                 """INSERT INTO work_orders
@@ -948,13 +982,14 @@ async def action_agent(state: AgentState) -> dict[str, Any]:
                     state["vessel_id"],
                     state["thread_id"],
                     state["turn_id"],
-                    equipment["id"] if equipment else "unresolved",
+                    equipment["id"],
                     "ActionAgent",
                     state["final_synthesis"]["evaluation"][:500],
                 ),
             )
             await conn.commit()
-    return {"work_order_created": warranted}
+            
+    return {"work_order_created": warranted, "action_rejection_reason": rejection_reason}
 
 
 async def profile_consolidation_node(state: AgentState) -> dict[str, Any]:

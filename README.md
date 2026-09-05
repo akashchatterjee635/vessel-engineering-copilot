@@ -1,19 +1,14 @@
 # Vessel Engineering Copilot
 
-A multi-tenant, multi-agent AI platform for ship's crew — built with **LangGraph**, **FastMCP** remote tool servers, and async parallel execution. Serves as both an **Enterprise AI Knowledge Platform** (Advanced RAG, Guardrails, LLMOps) and an **Autonomous Multi-Agent AI Platform** (HITL, persistent checkpointing, CEMG causal memory).
+A tenant-aware, multi-agent AI platform for ship's crew — built with **LangGraph**, **FastMCP** remote tool servers, and async parallel execution. 
 
 ## Architecture
 
 ```text
                           ┌─────────────────────────┐
                           │    FastMCP Servers       │
-                          │  (Streamable HTTP)       │
                           │                          │
                           │  :8001 Telemetry MCP     │
-                          │  :8002 Compliance MCP    │
-                          │  :8003 History/RAG MCP   │
-                          │  :8004 Weather MCP       │
-                          │  :8005 Port Services MCP │
                           └──────────┬──────────────┘
                                      │ MCP Protocol
                           ┌──────────▼──────────────┐
@@ -24,7 +19,7 @@ A multi-tenant, multi-agent AI platform for ship's crew — built with **LangGra
 ┌────────────────────────────────────▼────────────────────────────────────┐
 │                        LangGraph Orchestrator                          │
 │                                                                        │
-│  __start__ → InputGuardrail → TriageRouter → ResolveEquipment          │
+│  __start__ → TriageRouter → ResolveEquipment                           │
 │                  │                                │                     │
 │          (blocked queries)              DocumentRetriever               │
 │                  │                                │                     │
@@ -53,50 +48,36 @@ A multi-tenant, multi-agent AI platform for ship's crew — built with **LangGra
 
 ### Enterprise AI Knowledge Platform
 - **Advanced RAG**: Retrieves equipment manuals, safety standards, and troubleshooting guides
-- **Input Guardrails**: Blocks safety-bypass commands (configurable via `model_config.yaml`)
 - **Output Guardrails**: Enforces mandatory ATEX safety warnings when gas hazards are active
-- **LLMOps Telemetry**: Token counting via `tiktoken`, cost estimation, latency tracking, triage utilization audit
+- **LLMOps**: Token counting, cost estimation, triage utilization audit
 
 ### Autonomous Multi-Agent AI Platform
-- **FastMCP Integration**: 5 remote MCP servers with realistic maritime data simulation
-- **CEMG Memory**: Causal Experience Memory Graph for tool failure avoidance and probation
-- **Persistent HITL**: `AsyncSqliteSaver` checkpointer for work order approval gates
-- **Profile Consolidation**: Dynamic crew experience tracking across vessel classes
-
-### MLOps & Production Readiness
-- **Prometheus Metrics**: LLM tokens, API costs, tool latency, guardrail blocks, ATEX alerts
-- **Grafana Dashboard**: Pre-built monitoring dashboard (`mlops/grafana/dashboard.json`)
-- **Eval Tracker**: SQLite-based regression tracking tied to git SHAs
-- **CI/CD Pipeline**: GitHub Actions with lint, test, Docker build, and eval regression jobs
-- **Docker Compose**: Full containerized deployment with 6 services
+- **Streamlit UI**: Real-time telemetry dashboard + Copilot Chat interface
+- **FastMCP Integration**: Telemetry MCP server with realistic maritime data simulation
+- **CEMG Memory**: Causal Experience Memory Graph for tool failure avoidance
+- **Persistent HITL**: Interactive UI for Work Order approval/rejection gates
+- **Deterministic Action Policy**: Strict rules block automated actions in safety-critical ATEX zones
 
 ## Project Structure
 
 ```
 vessel-engineering-copilot/
-├── graph.py                    # LangGraph orchestrator + MCPClientManager + Prometheus
+├── app.py                      # Streamlit Frontend + Async loop management
+├── graph.py                    # LangGraph orchestrator + MCPClientManager
 ├── db.py                       # Async SQLite data-access layer
-├── schema.sql                  # Full multi-tenant database schema
+├── schema.sql                  # Tenant-aware database schema
 ├── requirements.txt            # Production dependencies
-├── requirements-dev.txt        # Dev/CI dependencies (ruff, pytest)
 ├── .env.example                # Environment variable template
 ├── Dockerfile                  # Main app container
 ├── Dockerfile.mcp              # MCP server container (parameterized)
-├── docker-compose.yml          # Full stack: app + 5 MCP servers
+├── docker-compose.yml          # Full stack: app + Telemetry MCP
 │
 ├── mcp_servers/                # FastMCP remote tool servers
-│   ├── telemetry_server.py     # Port 8001 — machinery vibration, gas readings
-│   ├── compliance_server.py    # Port 8002 — DNV/SOLAS/MARPOL/ATEX rules
-│   ├── history_server.py       # Port 8003 — maintenance logs + manual search
-│   ├── weather_server.py       # Port 8004 — marine weather + voyage conditions
-│   └── port_services_server.py # Port 8005 — port services + berth availability
+│   └── telemetry_server.py     # Port 8001 — machinery vibration, gas readings
 │
 ├── mlops/                      # MLOps infrastructure
 │   ├── model_config.yaml       # Centralized model/guardrail/feature config
-│   ├── prometheus.yml          # Prometheus scrape configuration
-│   ├── eval_tracker.py         # Evaluation regression tracker
-│   └── grafana/
-│       └── dashboard.json      # Pre-built Grafana monitoring dashboard
+│   └── eval_tracker.py         # Evaluation regression tracker
 │
 ├── tests/                      # Test suites
 │   ├── seed.py                 # Database seeding script
