@@ -28,7 +28,6 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-
 try:
     from fastmcp import Client as MCPClient
 
@@ -939,7 +938,7 @@ async def checklist_agent_node(state: AgentState) -> dict[str, Any]:
 async def action_agent(state: AgentState) -> dict[str, Any]:
     decision = state["triage_decision"]
     equipment = state.get("equipment_record")
-    
+
     # POINT 2 FIX: Deterministic Action-Policy Layer
     warranted = False
     rejection_reason = None
@@ -981,7 +980,7 @@ async def action_agent(state: AgentState) -> dict[str, Any]:
                 ),
             )
             await conn.commit()
-            
+
     return {"work_order_created": warranted, "action_rejection_reason": rejection_reason}
 
 

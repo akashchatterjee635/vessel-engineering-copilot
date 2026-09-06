@@ -90,15 +90,17 @@ async def run_scenario(name, user_query, triage_decision, log_extraction=None, e
     cfg = {"configurable": {"thread_id": turn_id}}
     try:
         result = await g.app.ainvoke(state, config=cfg)
-        
+
         # Check if we hit the ActionAgent interrupt (which we do for elevated urgency)
         graph_state = await g.app.aget_state(cfg)
         if graph_state.next and "ActionAgent" in graph_state.next:
             print("(paused before ActionAgent -- simulating human approval, resuming)")
             # Simulate human clicking 'Approve' in UI
-            await g.app.aupdate_state(cfg, {"triage_decision": {**graph_state.values["triage_decision"], "human_approval": "approved"}})
+            await g.app.aupdate_state(
+                cfg, {"triage_decision": {**graph_state.values["triage_decision"], "human_approval": "approved"}}
+            )
             result = await g.app.ainvoke(None, config=cfg)
-            
+
         print(
             "Graph completed. Interaction type:",
             result["triage_decision"]["interaction_type"],
@@ -289,7 +291,7 @@ async def main():
     ]:
         cur = conn.execute(f"SELECT COUNT(*) FROM {table}")
         print(f"{table}: {cur.fetchone()[0]} rows")
-    
+
     conn.close()
     await g.app.aclose()
 
