@@ -138,9 +138,37 @@ async def insert_atex_event(
 
 
 async def search_documents(vessel_class: str, equipment_id: str | None, query: str) -> list[dict[str, Any]]:
+    """
+    Hybrid RAG Search:
+    1. Metadata filtering (vessel_class, equipment_id)
+    2. Dense Semantic Search (Cosine Similarity using OpenAI embeddings)
+    3. Lexical Search (Keyword overlap / TF-IDF approximation)
+    4. Reciprocal Rank Fusion / Score Normalization
+    """
+    # Lexical setup
     words = [w.lower() for w in query.split() if len(w) > 3]
+    
+    # Semantic setup (if API key available, else skip semantic)
+    query_embedding = None
+    if os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_API_KEY") != "sk-dummy-for-import-only":
+        try:
+            from langchain_openai import OpenAIEmbeddings
+            embedder = OpenAIEmbeddings(model="text-embedding-3-small")
+            query_embedding = embedder.embed_query(query)
+        except Exception:
+            pass
+            
+    def cosine_similarity(v1, v2):
+        if not v1 or not v2: return 0.0
+        dot = sum(a * b for a, b in zip(v1, v2))
+        norm1 = sum(a * a for a in v1) ** 0.5
+        norm2 = sum(b * b for b in v2) ** 0.5
+        if norm1 == 0 or norm2 == 0: return 0.0
+        return dot / (norm1 * norm2)
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # 1. Metadata filter
         if equipment_id:
             cursor = await db.execute(
                 "SELECT * FROM documents WHERE vessel_class = ? OR equipment_id = ?",
@@ -156,12 +184,29 @@ async def search_documents(vessel_class: str, equipment_id: str | None, query: s
 
         scored = []
         for cand in candidates:
-            score = 0
+            # 2. Lexical score
+            lexical_score = 0.0
             text = (cand["title"] + " " + cand["content"]).lower()
             for w in words:
                 if w in text:
-                    score += 1
-            scored.append((score, cand))
+                    lexical_score += 1.0
+                    
+            # Normalize lexical (approx)
+            if words:
+                lexical_score = lexical_score / len(words)
+                
+            # 3. Semantic score
+            semantic_score = 0.0
+            if query_embedding and cand.get("embedding"):
+                try:
+                    doc_embedding = json.loads(cand["embedding"])
+                    semantic_score = cosine_similarity(query_embedding, doc_embedding)
+                except Exception:
+                    pass
+                    
+            # 4. Hybrid score (Weighted combination)
+            hybrid_score = (lexical_score * 0.4) + (semantic_score * 0.6)
+            scored.append((hybrid_score, cand))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [item for score, item in scored if score > 0] or candidates[:2]

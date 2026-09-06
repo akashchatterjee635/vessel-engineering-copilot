@@ -766,6 +766,65 @@ Port/maps: {state.get("maps_data")}"""
     }
 
 
+class GroundingCheck(BaseModel):
+    is_supported: bool
+    unsupported_claims: list[str]
+    source_map: dict[str, str]
+    revised_evaluation: str | None
+
+
+async def claim_grounding_node(state: AgentState) -> dict[str, Any]:
+    if state.get("guardrail_violation") or not state.get("final_synthesis"):
+        return {}
+        
+    synthesis = state["final_synthesis"]["evaluation"]
+    
+    # Collect context sources
+    sources = []
+    if state.get("telemetry_data"):
+        sources.append(f"Telemetry: {json.dumps(state['telemetry_data'])}")
+    if state.get("historical_rag_data"):
+        sources.append(f"History: {json.dumps(state['historical_rag_data'])}")
+    if state.get("rag_documents"):
+        for d in state["rag_documents"]:
+            sources.append(f"Manual {d['title']}: {d['content']}")
+            
+    if not sources:
+        return {} # Nothing to ground against
+
+    prompt = f"""You are a strict technical grounding validator.
+    Evaluate the following synthesis and ensure every technical claim, recommendation, or metric is directly supported by the provided sources.
+    
+    Synthesis:
+    {synthesis}
+    
+    Sources:
+    {chr(10).join(sources)}
+    
+    If there are hallucinated claims, set is_supported=false, list them, and provide a revised_evaluation with the unsupported claims removed.
+    """
+    
+    check, audit_rec = await call_llm_with_audit(
+        "ClaimGroundingAgent",
+        prompt,
+        structured_schema=GroundingCheck,
+        confidence_score=1.0
+    )
+    
+    audit_records = state.get("audit_records", []) + [audit_rec]
+    
+    if not check.is_supported and check.revised_evaluation:
+        return {
+            "final_synthesis": {
+                **state["final_synthesis"],
+                "evaluation": check.revised_evaluation
+            },
+            "audit_records": audit_records
+        }
+    
+    return {"audit_records": audit_records}
+
+
 async def output_guardrail_node(state: AgentState) -> dict[str, Any]:
     if state.get("guardrail_violation"):
         return {"output_guardrail_applied": False}
@@ -1074,6 +1133,7 @@ workflow.add_node("DocumentRetriever", document_retriever_node)
 workflow.add_node("ATEXHazardCheck", atex_hazard_check_node)
 workflow.add_node("FanOutOrchestrator", fan_out_orchestrator)
 workflow.add_node("SynthesisAgent", synthesis_agent)
+workflow.add_node("ClaimGroundingAgent", claim_grounding_node)
 workflow.add_node("OutputGuardrail", output_guardrail_node)
 workflow.add_node("ActionAgent", action_agent)
 workflow.add_node("ProfileConsolidationAgent", profile_consolidation_node)
@@ -1106,7 +1166,8 @@ workflow.add_conditional_edges(
 )
 
 workflow.add_edge("FanOutOrchestrator", "SynthesisAgent")
-workflow.add_edge("SynthesisAgent", "OutputGuardrail")
+workflow.add_edge("SynthesisAgent", "ClaimGroundingAgent")
+workflow.add_edge("ClaimGroundingAgent", "OutputGuardrail")
 workflow.add_edge("OutputGuardrail", "ActionAgent")
 workflow.add_edge("ActionAgent", "ProfileConsolidationAgent")
 workflow.add_edge("ProfileConsolidationAgent", "AuditNode")

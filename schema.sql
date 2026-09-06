@@ -195,6 +195,7 @@ CREATE TABLE documents (
     title TEXT NOT NULL,
     content TEXT NOT NULL,
     section_name TEXT,
+    embedding TEXT,                         -- JSON list of floats for semantic search
     FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_documents_lookup ON documents(equipment_id, vessel_class);

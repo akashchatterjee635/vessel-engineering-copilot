@@ -129,10 +129,13 @@ def seed():
         ),
     )
 
+    # For testing, we just generate mock 1536-d embeddings
+    mock_embedding = json.dumps([0.01] * 1536)
+
     # Documents for RAG search
     conn.execute(
-        """INSERT INTO documents (id, equipment_id, vessel_class, title, content, section_name)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO documents (id, equipment_id, vessel_class, title, content, section_name, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             "doc-aux-pump-001",
             PUMP_EQUIPMENT_ID,
@@ -140,12 +143,13 @@ def seed():
             "Sulzer AHLSTAR Troubleshooting Guide",
             "If grinding noise is observed on startup: 1. Verify gland packing tightness. If too tight, loosen slightly and monitor temperature. 2. Check alignment of pump shaft. Misalignment causes coupling wear and grinding noise. 3. Check lubrication level in bearing housing. Low oil will cause bearing failure.",
             "Troubleshooting",
+            mock_embedding,
         ),
     )
 
     conn.execute(
-        """INSERT INTO documents (id, equipment_id, vessel_class, title, content, section_name)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO documents (id, equipment_id, vessel_class, title, content, section_name, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             "doc-cargo-pump-001",
             CARGO_PUMP_EQUIPMENT_ID,
@@ -153,12 +157,13 @@ def seed():
             "Framo SD125 Cargo Pump Safety Procedures",
             "Framo SD125 is Zone 1 ATEX rated equipment. Crucial operation limits: 1. Max vibration amplitude: 7.0 mm/s. Vibrations exceeding 9.0 mm/s require immediate shutdown. 2. LEL Gas concentration: Keep below 10% LEL. At 20% LEL, automatic shutdown must be initiated and area ventilated.",
             "ATEX Safety",
+            mock_embedding,
         ),
     )
 
     conn.execute(
-        """INSERT INTO documents (id, equipment_id, vessel_class, title, content, section_name)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO documents (id, equipment_id, vessel_class, title, content, section_name, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             "doc-aframax-001",
             None,
@@ -166,6 +171,7 @@ def seed():
             "Aframax Class Tanker Safety Guide",
             "ATEX Zoned Equipment Guidelines: All equipment located in cargo zones (decks, pump rooms) must conform to ATEX Zone 1 or Zone 0 requirements. Any gas readings exceeding 10% LEL must be treated as alert, and 20% LEL as critical emergency. Hot work is strictly prohibited in these zones without formal gas-free certification.",
             "Zoned Safety Guidelines",
+            mock_embedding,
         ),
     )
 
