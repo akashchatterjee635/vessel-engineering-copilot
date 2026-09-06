@@ -28,13 +28,6 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-try:
-    from prometheus_client import Counter, Gauge, Histogram
-    from prometheus_client import start_http_server as prom_start
-
-    PROMETHEUS_AVAILABLE = True
-except ImportError:
-    PROMETHEUS_AVAILABLE = False
 
 try:
     from fastmcp import Client as MCPClient
@@ -1152,6 +1145,13 @@ class LazyCompiledGraph:
     async def ainvoke(self, *args, **kwargs):
         await self._ensure_compiled()
         return await self._compiled_app.ainvoke(*args, **kwargs)
+
+    async def aclose(self):
+        if self._conn:
+            await self._conn.close()
+            self._conn = None
+        self._compiled_app = None
+        self._saver = None
 
     async def astream(self, *args, **kwargs):
         await self._ensure_compiled()
