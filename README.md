@@ -115,13 +115,6 @@ docker-compose up --build -d
 
 # Verify health
 curl http://localhost:8001/mcp   # Telemetry MCP
-curl http://localhost:8002/mcp   # Compliance MCP
-curl http://localhost:8003/mcp   # History MCP
-curl http://localhost:8004/mcp   # Weather MCP
-curl http://localhost:8005/mcp   # Port Services MCP
-
-# Run integration tests against live MCP servers
-LIVE_MCP=true pytest tests/test_mcp_servers.py -v
 ```
 
 ### Option 3: Run Individual MCP Servers

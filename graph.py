@@ -1,5 +1,5 @@
 """
-Vessel Engineering Copilot — full orchestrator (v5 with MCP + CEMG + LLMOps + Guardrails + Prometheus)
+Vessel Engineering Copilot — full orchestrator (v5 with MCP + CEMG + LLMOps + Guardrails)
 
 Covers:
 1. FastMCP Remote Server Integration (Streamable HTTP transport).
@@ -8,7 +8,6 @@ Covers:
 4. Persistent SQLite Checkpointing (LangGraph SqliteSaver).
 5. CEMG Causal Experience Memory (tool peeking, storing outcomes, cooldowns).
 6. LLMOps logging (token count, cost estimations, and latency logging).
-7. Prometheus metrics instrumentation.
 """
 
 import asyncio
@@ -329,6 +328,17 @@ async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, sta
             "status_before": sig_status["status_before"],
         }
     )
+
+    # 1.5 Avoidance (Active Failure Suppression)
+    if sig_status["status_before"] == "ACTIVE_FAILURE":
+        state["cemg_memory_context"] = (
+            state.get("cemg_memory_context", "")
+            + f"Skipped tool {tool_name} with params {params} because CEMG memory indicates it is in ACTIVE_FAILURE state.\n"
+        )
+        return {
+            "error": "ACTIVE_FAILURE_SUPPRESSED",
+            "message": f"CEMG avoided executing {tool_name} as it recently failed with these parameters.",
+        }
 
     start = time.perf_counter()
     try:
@@ -1037,25 +1047,43 @@ async def action_agent(state: AgentState) -> dict[str, Any]:
     return {"work_order_created": warranted, "action_rejection_reason": rejection_reason}
 
 
+class ProfileExtraction(BaseModel):
+    equipment: str | None
+    vessel_class: str | None
+    claim_type: Literal["certification", "experience", "unknown"]
+    polarity: Literal["positive", "negative", "neutral"]
+    confidence: float
+
+
 async def profile_consolidation_node(state: AgentState) -> dict[str, Any]:
     query = state["user_query"].lower()
     engineer_id = state["engineer_id"]
     tenant_id = state["tenant_id"]
 
+    prompt = f"""Extract any claims of professional experience, certification, or familiarization with specific vessels or equipment.
+If they say they have NEVER worked on it, polarity is negative.
+Query: "{query}"
+"""
+    extraction, audit_rec = await call_llm_with_audit(
+        "ProfileConsolidationAgent", prompt, structured_schema=ProfileExtraction, confidence_score=1.0
+    )
+
     updated = False
     vessel_class = None
     equipment_model = None
 
-    if any(keyword in query for keyword in ("certified on", "worked on", "experienced with", "knows how to")):
-        if "framo" in query:
-            equipment_model = "Framo/SD125"
-            updated = True
-        if "sulzer" in query:
-            equipment_model = "Sulzer/AHLSTAR-APP"
-            updated = True
-        if "aframax" in query:
-            vessel_class = "Aframax"
-            updated = True
+    if extraction.polarity == "positive" and extraction.confidence > 0.7:
+        if extraction.equipment:
+            if "framo" in extraction.equipment.lower():
+                equipment_model = "Framo/SD125"
+                updated = True
+            elif "sulzer" in extraction.equipment.lower():
+                equipment_model = "Sulzer/AHLSTAR-APP"
+                updated = True
+        if extraction.vessel_class:
+            if "aframax" in extraction.vessel_class.lower():
+                vessel_class = "Aframax"
+                updated = True
 
     if updated:
         await db.update_crew_profile(
@@ -1065,12 +1093,13 @@ async def profile_consolidation_node(state: AgentState) -> dict[str, Any]:
             equipment_model=equipment_model,
         )
 
+    audit_records = state.get("audit_records", []) + [audit_rec]
     await db.insert_message(str(uuid.uuid4()), state["thread_id"], "user", state["user_query"])
     synthesis = state.get("final_synthesis", {}).get("evaluation")
     if synthesis:
         await db.insert_message(str(uuid.uuid4()), state["thread_id"], "assistant", synthesis)
 
-    return {}
+    return {"audit_records": audit_records}
 
 
 async def flush_audit_records(state: AgentState) -> None:

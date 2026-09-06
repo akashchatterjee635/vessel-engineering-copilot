@@ -60,6 +60,12 @@ def make_fake_llm(
                 return FakeRunnable(
                     g.GroundingCheck(is_supported=True, unsupported_claims=[], source_map={}, revised_evaluation=None)
                 )
+            elif name == "ProfileExtraction":
+                return FakeRunnable(
+                    g.ProfileExtraction(
+                        equipment=None, vessel_class=None, claim_type="unknown", polarity="neutral", confidence=1.0
+                    )
+                )
             raise ValueError(f"Unmocked schema: {name}")
 
     return FakeLLM()
