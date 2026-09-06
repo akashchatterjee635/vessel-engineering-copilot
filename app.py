@@ -175,39 +175,46 @@ def main():
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Processing..."):
-                state = {**COMMON_STATE, "thread_id": st.session_state.thread_id, "user_query": prompt}
+            status_container = st.status("Orchestrating agents...", expanded=True)
 
-                async def _run_graph():
-                    # Run graph in a single event loop to prevent lock errors
-                    return await g.app.ainvoke(state, config=cfg)
+            state = {**COMMON_STATE, "thread_id": st.session_state.thread_id, "user_query": prompt}
 
-                try:
-                    result = asyncio.run(_run_graph())
+            async def _run_graph():
+                final_result = None
+                async for chunk in g.app.astream(state, config=cfg):
+                    for node_name, node_state in chunk.items():
+                        status_container.write(f"Executing step: **{node_name}**")
+                        final_result = node_state
+                return final_result
 
-                    # If it paused immediately on this turn (e.g., ActionAgent), don't process final_synthesis yet
-                    # We will re-render and hit the `is_paused` block above
-                    new_graph_state = asyncio.run(_check_status())
-                    if new_graph_state and new_graph_state.next and "ActionAgent" in new_graph_state.next:
-                        synthesis = result.get("final_synthesis", {}).get("evaluation", "")
-                        if synthesis:
-                            st.markdown(synthesis)
-                            st.session_state.messages.append({"role": "assistant", "content": synthesis})
-                        st.rerun()
+            try:
+                result = asyncio.run(_run_graph())
+                status_container.update(label="Graph execution complete", state="complete", expanded=False)
 
+                # If it paused immediately on this turn (e.g., ActionAgent), don't process final_synthesis yet
+                # We will re-render and hit the `is_paused` block above
+                new_graph_state = asyncio.run(_check_status())
+                if new_graph_state and new_graph_state.next and "ActionAgent" in new_graph_state.next:
                     synthesis = result.get("final_synthesis", {}).get("evaluation", "")
-                    if not synthesis and result.get("logbook_result"):
-                        synthesis = "Logbook entry successfully recorded."
+                    if synthesis:
+                        st.markdown(synthesis)
+                        st.session_state.messages.append({"role": "assistant", "content": synthesis})
+                    st.rerun()
 
-                except Exception as e:
-                    synthesis = f"Error processing query: {str(e)}"
-                    result = {}
+                synthesis = result.get("final_synthesis", {}).get("evaluation", "")
+                if not synthesis and result.get("logbook_result"):
+                    synthesis = "Logbook entry successfully recorded."
 
-                st.markdown(synthesis)
-                st.session_state.messages.append({"role": "assistant", "content": synthesis})
+            except Exception as e:
+                status_container.update(label="Graph execution failed", state="error", expanded=True)
+                synthesis = f"Error processing query: {str(e)}"
+                result = {}
 
-                with st.expander("Diagnostic Trace"):
-                    st.json(result.get("triage_decision", {}))
+            st.markdown(synthesis)
+            st.session_state.messages.append({"role": "assistant", "content": synthesis})
+
+            with st.expander("Diagnostic Trace"):
+                st.json(result.get("triage_decision", {}))
 
 
 if __name__ == "__main__":
