@@ -776,9 +776,9 @@ class GroundingCheck(BaseModel):
 async def claim_grounding_node(state: AgentState) -> dict[str, Any]:
     if state.get("guardrail_violation") or not state.get("final_synthesis"):
         return {}
-        
+
     synthesis = state["final_synthesis"]["evaluation"]
-    
+
     # Collect context sources
     sources = []
     if state.get("telemetry_data"):
@@ -788,9 +788,9 @@ async def claim_grounding_node(state: AgentState) -> dict[str, Any]:
     if state.get("rag_documents"):
         for d in state["rag_documents"]:
             sources.append(f"Manual {d['title']}: {d['content']}")
-            
+
     if not sources:
-        return {} # Nothing to ground against
+        return {}  # Nothing to ground against
 
     prompt = f"""You are a strict technical grounding validator.
     Evaluate the following synthesis and ensure every technical claim, recommendation, or metric is directly supported by the provided sources.
@@ -803,25 +803,19 @@ async def claim_grounding_node(state: AgentState) -> dict[str, Any]:
     
     If there are hallucinated claims, set is_supported=false, list them, and provide a revised_evaluation with the unsupported claims removed.
     """
-    
+
     check, audit_rec = await call_llm_with_audit(
-        "ClaimGroundingAgent",
-        prompt,
-        structured_schema=GroundingCheck,
-        confidence_score=1.0
+        "ClaimGroundingAgent", prompt, structured_schema=GroundingCheck, confidence_score=1.0
     )
-    
+
     audit_records = state.get("audit_records", []) + [audit_rec]
-    
+
     if not check.is_supported and check.revised_evaluation:
         return {
-            "final_synthesis": {
-                **state["final_synthesis"],
-                "evaluation": check.revised_evaluation
-            },
-            "audit_records": audit_records
+            "final_synthesis": {**state["final_synthesis"], "evaluation": check.revised_evaluation},
+            "audit_records": audit_records,
         }
-    
+
     return {"audit_records": audit_records}
 
 

@@ -147,23 +147,26 @@ async def search_documents(vessel_class: str, equipment_id: str | None, query: s
     """
     # Lexical setup
     words = [w.lower() for w in query.split() if len(w) > 3]
-    
+
     # Semantic setup (if API key available, else skip semantic)
     query_embedding = None
     if os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_API_KEY") != "sk-dummy-for-import-only":
         try:
             from langchain_openai import OpenAIEmbeddings
+
             embedder = OpenAIEmbeddings(model="text-embedding-3-small")
             query_embedding = embedder.embed_query(query)
         except Exception:
             pass
-            
+
     def cosine_similarity(v1, v2):
-        if not v1 or not v2: return 0.0
+        if not v1 or not v2:
+            return 0.0
         dot = sum(a * b for a, b in zip(v1, v2))
         norm1 = sum(a * a for a in v1) ** 0.5
         norm2 = sum(b * b for b in v2) ** 0.5
-        if norm1 == 0 or norm2 == 0: return 0.0
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
         return dot / (norm1 * norm2)
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -190,11 +193,11 @@ async def search_documents(vessel_class: str, equipment_id: str | None, query: s
             for w in words:
                 if w in text:
                     lexical_score += 1.0
-                    
+
             # Normalize lexical (approx)
             if words:
                 lexical_score = lexical_score / len(words)
-                
+
             # 3. Semantic score
             semantic_score = 0.0
             if query_embedding and cand.get("embedding"):
@@ -203,7 +206,7 @@ async def search_documents(vessel_class: str, equipment_id: str | None, query: s
                     semantic_score = cosine_similarity(query_embedding, doc_embedding)
                 except Exception:
                     pass
-                    
+
             # 4. Hybrid score (Weighted combination)
             hybrid_score = (lexical_score * 0.4) + (semantic_score * 0.6)
             scored.append((hybrid_score, cand))

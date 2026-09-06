@@ -57,7 +57,9 @@ def make_fake_llm(
             elif name == "LogExtraction":
                 return FakeRunnable(CURRENT_LOG_EXTRACTION[0])
             elif name == "GroundingCheck":
-                return FakeRunnable(g.GroundingCheck(is_supported=True, unsupported_claims=[], source_map={}, revised_evaluation=None))
+                return FakeRunnable(
+                    g.GroundingCheck(is_supported=True, unsupported_claims=[], source_map={}, revised_evaluation=None)
+                )
             raise ValueError(f"Unmocked schema: {name}")
 
     return FakeLLM()
