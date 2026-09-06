@@ -1,8 +1,17 @@
 import asyncio
 import os
+import time
 import uuid
 
 import streamlit as st
+
+
+def stream_string(text: str, delay: float = 0.04):
+    words = text.split(" ")
+    for i, word in enumerate(words):
+        yield word + (" " if i < len(words) - 1 else "")
+        time.sleep(delay)
+
 
 # Initialize environment for the dashboard
 os.environ["VESSEL_COPILOT_DB"] = "test_vessel_copilot.db"
@@ -197,7 +206,7 @@ def main():
                 if new_graph_state and new_graph_state.next and "ActionAgent" in new_graph_state.next:
                     synthesis = result.get("final_synthesis", {}).get("evaluation", "")
                     if synthesis:
-                        st.markdown(synthesis)
+                        st.write_stream(stream_string(synthesis))
                         st.session_state.messages.append({"role": "assistant", "content": synthesis})
                     st.rerun()
 
@@ -210,7 +219,9 @@ def main():
                 synthesis = f"Error processing query: {str(e)}"
                 result = {}
 
-            st.markdown(synthesis)
+            if synthesis:
+                st.write_stream(stream_string(synthesis))
+
             st.session_state.messages.append({"role": "assistant", "content": synthesis})
 
             with st.expander("Diagnostic Trace"):
