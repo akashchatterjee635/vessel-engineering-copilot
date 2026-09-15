@@ -156,8 +156,7 @@ cemg_storage = SqliteStorage(db_path=CEMG_DB_PATH)
 
 
 # --- 1b. Prometheus Metrics ---
-# (Removed per user request)
-_PROM_ENABLED = False
+# Metrics are always active; the HTTP server is started in app.py via start_http_server(9090).
 
 
 # --- 1c. MCP Client Manager ---
@@ -380,6 +379,26 @@ async def call_llm_with_audit(
 # --- 5. Tool execution wrapped with CEMG ---
 
 
+async def _retry_with_backoff(
+    coro_factory,
+    max_attempts: int = 3,
+    base_delay: float = 1.0,
+    timeout: float = 5.0,
+):
+    """Retry *coro_factory* with exponential backoff and a per-attempt timeout.
+
+    Delays: 1 s → 2 s → 4 s (base_delay * 2**attempt).
+    Raises the last exception if all attempts are exhausted.
+    """
+    for attempt in range(max_attempts):
+        try:
+            return await asyncio.wait_for(coro_factory(), timeout=timeout)
+        except (ConnectionError, asyncio.TimeoutError) as exc:
+            if attempt == max_attempts - 1:
+                raise
+            await asyncio.sleep(base_delay * (2**attempt))
+
+
 async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, state: AgentState) -> dict[str, Any]:
     with tracer.start_as_current_span(f"mcp_call:{tool_name}") as span:
         span.set_attribute("tool_name", tool_name)
@@ -439,22 +458,15 @@ async def _execute_tool_with_cemg_inner(
 
     start = time.perf_counter()
     try:
-        # DISTRIBUTED RESILIENCE: Retry with exponential backoff & Timeout
-        res = None
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # Simulate connection/execution failures for testing
-                if tool_name == "telemetry_mcp" and params.get("equipment_id") == "equip-failed-telemetry":
-                    raise ConnectionError("Telemetry connection timed out (sensor offline).")
+        # DISTRIBUTED RESILIENCE: Retry with exponential backoff & per-attempt timeout.
+        # Exhausted retries raise and flow into circuit-breaker failure recording below.
+        def _factory_with_sim():
+            # Inject deterministic failure for testing (specific equipment id only)
+            if tool_name == "telemetry_mcp" and params.get("equipment_id") == "equip-failed-telemetry":
+                raise ConnectionError("Telemetry connection timed out (sensor offline).")
+            return coro_factory()
 
-                # Enforce timeout (e.g. 5 seconds)
-                res = await asyncio.wait_for(coro_factory(), timeout=5.0)
-                break
-            except (ConnectionError, asyncio.TimeoutError) as e:
-                if attempt == max_retries - 1:
-                    raise e
-                await asyncio.sleep(2**attempt)  # Exponential backoff
+        res = await _retry_with_backoff(_factory_with_sim, max_attempts=3, base_delay=1.0, timeout=5.0)
 
         latency_ms = int((time.perf_counter() - start) * 1000)
         TOOL_LATENCY.labels(tool_name=tool_name).observe(time.perf_counter() - start)
@@ -1120,6 +1132,17 @@ async def checklist_agent_node(state: AgentState) -> dict[str, Any]:
 
 
 async def action_agent(state: AgentState) -> dict[str, Any]:
+    # --- RBAC enforcement ---
+    _ALLOWED_APPROVAL_ROLES = {"chief_engineer", "fleet_admin"}
+    user_role = state.get("user_role", "engineer")
+    if user_role not in _ALLOWED_APPROVAL_ROLES:
+        return {
+            "work_order_created": False,
+            "action_rejection_reason": (
+                f"RBAC: role '{user_role}' cannot approve work orders. Requires Chief Engineer or Fleet Admin."
+            ),
+        }
+
     decision = state["triage_decision"]
     equipment = state.get("equipment_record")
 

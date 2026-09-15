@@ -56,6 +56,13 @@ jobs:
           VESSEL_COPILOT_DB: test_vessel_copilot.db
         run: python tests/audit_report.py
 
+      - name: Run eval regression
+        env:
+          OPENAI_API_KEY: sk-test-dummy
+          VESSEL_COPILOT_DB: test_vessel_copilot.db
+          VESSEL_COPILOT_CHECKPOINTS_DB: test_vessel_checkpoints.db
+        run: python tests/run_evals.py
+
   docker-build:
     runs-on: ubuntu-latest
     steps:

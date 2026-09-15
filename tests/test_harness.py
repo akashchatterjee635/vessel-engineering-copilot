@@ -302,6 +302,33 @@ async def main():
         cur = conn.execute(f"SELECT COUNT(*) FROM {table}")
         print(f"{table}: {cur.fetchone()[0]} rows")
 
+    # ── Tenant isolation invariant ──────────────────────────────────────────
+    print("\n======================================================================")
+    print("INVARIANT: Cross-tenant profile isolation")
+    print("======================================================================")
+    # Seed a profile for engineer-tenantB under tenant-B
+    conn.execute(
+        """INSERT OR REPLACE INTO crew_profiles
+           (id, engineer_id, tenant_id, known_vessel_classes, known_equipment_models)
+           VALUES ('tenantb-profile-1', 'engineer-tenantB', 'tenant-B', '[]', '[]')"""
+    )
+    conn.commit()
+    conn.close()
+
+    # Attempt to read that profile using tenant-A identity — must return None
+    import db as _db
+
+    profile_cross_tenant = await _db.get_crew_profile("engineer-tenantB", tenant_id="tenant-A")
+    assert profile_cross_tenant is None, "ISOLATION FAILURE: Tenant-A can read Tenant-B's crew profile!"
+    print("PASS: Tenant-B profile is not visible to Tenant-A queries.")
+
+    # Confirm it IS visible under the correct tenant
+    profile_same_tenant = await _db.get_crew_profile("engineer-tenantB", tenant_id="tenant-B")
+    assert profile_same_tenant is not None, "ISOLATION ERROR: Tenant-B cannot read its own crew profile!"
+    print("PASS: Tenant-B profile is correctly visible to Tenant-B queries.")
+    # ────────────────────────────────────────────────────────────────────────
+
+    conn = sqlite3.connect("test_vessel_copilot.db")
     conn.close()
     await g.app.aclose()
 

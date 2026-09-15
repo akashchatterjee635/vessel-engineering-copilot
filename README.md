@@ -120,12 +120,8 @@ curl http://localhost:8001/mcp   # Telemetry MCP
 ### Option 3: Run Individual MCP Servers
 
 ```bash
-# Start a single MCP server for development
+# Start the telemetry MCP server for development
 python -m mcp_servers.telemetry_server       # Port 8001
-python -m mcp_servers.compliance_server      # Port 8002
-python -m mcp_servers.history_server         # Port 8003
-python -m mcp_servers.weather_server         # Port 8004
-python -m mcp_servers.port_services_server   # Port 8005
 ```
 
 ## Configuration
@@ -141,19 +137,25 @@ Environment variables override YAML config. See [`.env.example`](.env.example) f
 
 ## Monitoring
 
-When `prometheus_enabled: true` in `model_config.yaml`:
+The Streamlit app starts a **Prometheus metrics server on `:9090/metrics`** at startup.
 
-- **Prometheus** scrapes metrics from `:9090/metrics` (copilot) and each MCP server
-- **Grafana** dashboard at `mlops/grafana/dashboard.json` visualizes:
-  - LLM token usage and cost burn rate
-  - Tool latency heatmap per MCP server
-  - Guardrail block rates
-  - ATEX alert frequency
-  - CEMG failure avoidance rates
+Tracked metrics:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `workflow_latency_seconds` | Histogram | End-to-end workflow latency |
+| `mcp_tool_latency_seconds` | Histogram | Per-tool MCP call latency |
+| `mcp_tool_failures_total` | Counter | Cumulative MCP failures per tool |
+| `llm_token_usage_total` | Counter | Prompt/completion tokens per agent |
+| `llm_cost_estimate_usd` | Counter | Estimated cost per agent |
+| `guardrail_blocks_total` | Counter | Guardrail intervention count |
+| `circuit_breaker_state` | Gauge | 0=CLOSED, 1=HALF_OPEN, 2=OPEN per tool |
+
+Distributed traces are exported via **OpenTelemetry** (console exporter by default; swap for Jaeger/OTLP by changing `BatchSpanProcessor`).
 
 ## CI/CD
 
 GitHub Actions pipelines at `.github/workflows/`:
 
-- **`ci.yml`**: Runs on every push/PR — linting (ruff), unit tests, Docker build validation, eval regression checks
-- **`deploy.yml`**: Deploys the full Docker Compose stack with smoke tests
+- **`ci.yml`**: Runs on every push/PR — linting (ruff), unit tests, eval regression (`run_evals.py`), Docker build validation
+- **`deploy.yml`**: Builds Docker images and applies Kubernetes manifests in `k8s/` to AKS (requires Azure credentials configured as GitHub Secrets)

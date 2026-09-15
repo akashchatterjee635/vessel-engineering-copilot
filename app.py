@@ -4,6 +4,7 @@ import time
 import uuid
 
 import streamlit as st
+from prometheus_client import start_http_server
 
 
 def stream_string(text: str, delay: float = 0.04):
@@ -19,6 +20,18 @@ os.environ["VESSEL_COPILOT_CHECKPOINTS_DB"] = "test_vessel_checkpoints.db"
 os.environ["CEMG_SQLITE_PATH"] = "cemg_memory.db"
 
 st.set_page_config(page_title="Vessel Engineering Copilot", page_icon="🚢", layout="wide")
+
+
+@st.cache_resource
+def _start_prometheus():
+    """Start the Prometheus metrics HTTP server (once per process)."""
+    try:
+        start_http_server(9090)
+    except OSError:
+        pass  # Already running (e.g. hot-reload)
+
+
+_start_prometheus()
 
 # Handle Streamlit Cloud Secrets
 if "OPENAI_API_KEY" in st.secrets:
@@ -152,36 +165,45 @@ def main():
         )
 
         col1, col2 = st.columns(2)
-        if col1.button("✅ Approve Work Order", use_container_width=True):
+        if selected_role in ("Chief Engineer", "Fleet Admin"):
+            if col1.button("✅ Approve Work Order", use_container_width=True):
 
-            async def _approve():
-                await g.app.aupdate_state(
-                    cfg, {"triage_decision": {**graph_state.values["triage_decision"], "human_approval": "approved"}}
+                async def _approve():
+                    await g.app.aupdate_state(
+                        cfg,
+                        {"triage_decision": {**graph_state.values["triage_decision"], "human_approval": "approved"}},
+                    )
+                    return await g.app.ainvoke(None, config=cfg)
+
+                with st.spinner("Executing..."):
+                    res = asyncio.run(_approve())
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": "✅ **Work Order Approved and Executed.**"}
                 )
-                return await g.app.ainvoke(None, config=cfg)
+                st.rerun()
 
-            with st.spinner("Executing..."):
-                res = asyncio.run(_approve())
-            st.session_state.messages.append(
-                {"role": "assistant", "content": "✅ **Work Order Approved and Executed.**"}
-            )
-            st.rerun()
+            if col2.button("❌ Reject", type="primary", use_container_width=True):
 
-        if col2.button("❌ Reject", type="primary", use_container_width=True):
+                async def _reject():
+                    await g.app.aupdate_state(
+                        cfg,
+                        {"triage_decision": {**graph_state.values["triage_decision"], "human_approval": "rejected"}},
+                    )
+                    return await g.app.ainvoke(None, config=cfg)
 
-            async def _reject():
-                await g.app.aupdate_state(
-                    cfg, {"triage_decision": {**graph_state.values["triage_decision"], "human_approval": "rejected"}}
+                with st.spinner("Canceling..."):
+                    res = asyncio.run(_reject())
+                reason = res.get("action_rejection_reason", "Human rejected work order.")
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": f"❌ **Work Order Rejected.** No action was taken. ({reason})"}
                 )
-                return await g.app.ainvoke(None, config=cfg)
-
-            with st.spinner("Canceling..."):
-                res = asyncio.run(_reject())
-            reason = res.get("action_rejection_reason", "Human rejected work order.")
-            st.session_state.messages.append(
-                {"role": "assistant", "content": f"❌ **Work Order Rejected.** No action was taken. ({reason})"}
+                st.rerun()
+        else:
+            role_label = "Auditor" if selected_role == "Auditor" else selected_role
+            st.info(
+                f"🔒 **{role_label}s** can view this work order proposal but cannot approve or reject it. "
+                "Switch to **Chief Engineer** or **Fleet Admin** in the sidebar to take action."
             )
-            st.rerun()
 
         return  # Block chat input while approval is pending
 
