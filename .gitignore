@@ -5,3 +5,11 @@ __pycache__/
 *.db-shm
 *.db-wal
 .env
+
+# One-off migration/patch scripts
+patch*.py
+fix_*.py
+add_*.py
+enforce_*.py
+create_*.py
+
