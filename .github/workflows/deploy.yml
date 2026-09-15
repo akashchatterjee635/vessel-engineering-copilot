@@ -1,4 +1,4 @@
-name: Deploy
+name: Deploy to AKS
 
 on:
   workflow_run:
@@ -9,18 +9,38 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy-local:
+  deploy-aks:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: $\{{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }\}
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare environment
-        run: cp .env.example .env
-      - name: Start services
-        run: docker compose up --build -d
-      - name: Wait for services to initialize
-        run: sleep 10
-      - name: Print service status
-        run: docker compose ps
-      - name: Stop services
-        run: docker compose down
+
+      # In a real environment, we would authenticate with Azure and ACR
+      # - uses: azure/login@v1
+      #   with:
+      #     creds: $\{{ secrets.AZURE_CREDENTIALS }\}
+      # - run: az acr login -n vesselcopilot
+
+      - name: Build and Push Images
+        run: |
+          docker build -f Dockerfile -t vesselcopilot.azurecr.io/copilot-app:latest .
+          docker build -f Dockerfile.mcp --build-arg SERVER_MODULE=telemetry_server --build-arg SERVER_PORT=8001 -t vesselcopilot.azurecr.io/mcp-telemetry:latest .
+          # docker push vesselcopilot.azurecr.io/copilot-app:latest
+          # docker push vesselcopilot.azurecr.io/mcp-telemetry:latest
+          echo "Simulated push to ACR"
+
+      # - uses: azure/aks-set-context@v3
+      #   with:
+      #     resource-group: my-resource-group
+      #     cluster-name: vessel-copilot-aks
+
+      - name: Deploy K8s Manifests
+        run: |
+          # kubectl apply -f k8s/namespace.yaml
+          # kubectl apply -f k8s/configmap.yaml
+          # kubectl apply -f k8s/secret.yaml
+          # kubectl apply -f k8s/pvc.yaml
+          # kubectl apply -f k8s/mcp-telemetry.yaml
+          # kubectl apply -f k8s/copilot-app.yaml
+          # kubectl apply -f k8s/hpa.yaml
+          echo "Simulated kubectl apply"

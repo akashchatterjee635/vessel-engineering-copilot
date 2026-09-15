@@ -58,12 +58,19 @@ if "messages" not in st.session_state:
     ]
 
 # Common context
-COMMON_STATE = {
-    "tenant_id": "tenant-001",
-    "vessel_id": "vessel-001",
-    "vessel_class": "Aframax",
-    "engineer_id": "engineer-001",
-}
+st.sidebar.title("Login & RBAC Simulator")
+selected_role = st.sidebar.selectbox("Role", ["Engineer", "Chief Engineer", "Auditor", "Fleet Admin"])
+selected_tenant = st.sidebar.selectbox("Tenant", ["tenant-001", "tenant-002"])
+
+
+def get_common_state():
+    return {
+        "tenant_id": selected_tenant,
+        "vessel_id": "vessel-001" if selected_tenant == "tenant-001" else "vessel-999",
+        "vessel_class": "Aframax",
+        "engineer_id": "engineer-001" if selected_role == "Engineer" else "chief-01",
+        "user_role": selected_role.lower().replace(" ", "_"),
+    }
 
 
 def render_telemetry_dashboard():
@@ -186,7 +193,7 @@ def main():
         with st.chat_message("assistant"):
             status_container = st.status("Orchestrating agents...", expanded=True)
 
-            state = {**COMMON_STATE, "thread_id": st.session_state.thread_id, "user_query": prompt}
+            state = {**get_common_state(), "thread_id": st.session_state.thread_id, "user_query": prompt}
 
             async def _run_graph():
                 final_result = None

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: copilot-app
+  namespace: vessel-copilot
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: copilot-app
+  template:
+    metadata:
+      labels:
+        app: copilot-app
+    spec:
+      containers:
+        - name: copilot-app
+          image: vesselcopilot.azurecr.io/copilot-app:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: copilot-config
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: copilot-secrets
+                  key: OPENAI_API_KEY
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: db-data
+              mountPath: /app/data
+      volumes:
+        - name: db-data
+          persistentVolumeClaim:
+            claimName: copilot-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: copilot-app
+  namespace: vessel-copilot
+spec:
+  type: LoadBalancer
+  selector:
+    app: copilot-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000

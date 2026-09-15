@@ -34,7 +34,79 @@ try:
 except ImportError:
     FASTMCP_AVAILABLE = False
 
+# --- OPENTELEMETRY TRACING ---
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+
 import db
+
+trace.set_tracer_provider(TracerProvider())
+tracer = trace.get_tracer(__name__)
+# Export to console for now, in a real system this would go to Jaeger/OTLP
+trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+# ------------------------------
+# --- PROMETHEUS METRICS ---
+from prometheus_client import Counter, Gauge, Histogram
+
+WORKFLOW_LATENCY = Histogram("workflow_latency_seconds", "Latency of workflow", ["interaction_type"])
+TOOL_LATENCY = Histogram("mcp_tool_latency_seconds", "Latency of MCP calls", ["tool_name"])
+TOOL_FAILURES = Counter("mcp_tool_failures_total", "Failures of MCP calls", ["tool_name"])
+TOKEN_USAGE = Counter("llm_token_usage_total", "Tokens used", ["agent_name", "token_type"])
+COST_ESTIMATE = Counter("llm_cost_estimate_usd", "Estimated LLM cost in USD", ["agent_name"])
+GUARDRAIL_BLOCKS = Counter("guardrail_blocks_total", "Number of times output was blocked by guardrail", ["agent_name"])
+CIRCUIT_BREAKER_STATE = Gauge(
+    "circuit_breaker_state", "State of circuit breaker (0=CLOSED, 1=HALF_OPEN, 2=OPEN)", ["tool_name"]
+)
+
+
+def update_cb_metrics(tool_name, state_str):
+    mapping = {"CLOSED": 0, "HALF_OPEN": 1, "OPEN": 2}
+    CIRCUIT_BREAKER_STATE.labels(tool_name=tool_name).set(mapping.get(state_str, 0))
+
+
+# --------------------------
+# --- DISTRIBUTED SYSTEMS RESILIENCE ---
+class CircuitBreaker:
+    def __init__(self, failure_threshold=3, recovery_timeout=30):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.failures = 0
+        self.last_failure_time = 0
+        self.state = "CLOSED"
+
+    def record_failure(self):
+        self.failures += 1
+        self.last_failure_time = time.time()
+        if self.failures >= self.failure_threshold:
+            self.state = "OPEN"
+
+    def record_success(self):
+        self.failures = 0
+        self.state = "CLOSED"
+
+    def can_execute(self):
+        if self.state == "CLOSED":
+            return True
+        if self.state == "OPEN":
+            if time.time() - self.last_failure_time > self.recovery_timeout:
+                self.state = "HALF_OPEN"
+                return True
+            return False
+        if self.state == "HALF_OPEN":
+            return True
+
+
+circuit_breakers = {}
+
+
+def get_circuit_breaker(tool_name):
+    if tool_name not in circuit_breakers:
+        circuit_breakers[tool_name] = CircuitBreaker()
+    return circuit_breakers[tool_name]
+
+
+# ----------------------------------------
 
 # CEMG memory imports with fallback
 try:
@@ -195,6 +267,7 @@ class TriageDecision(BaseModel):
 class AgentState(TypedDict, total=False):
     tenant_id: str
     vessel_id: str
+    user_role: str
     vessel_class: str
     thread_id: str
     turn_id: str
@@ -282,6 +355,10 @@ async def call_llm_with_audit(
     completion_tokens = count_tokens(response_text)
     cost = (prompt_tokens * cost_prompt + completion_tokens * cost_completion) / 1_000_000.0
 
+    TOKEN_USAGE.labels(agent_name=node_name, token_type="prompt").inc(prompt_tokens)
+    TOKEN_USAGE.labels(agent_name=node_name, token_type="completion").inc(completion_tokens)
+    COST_ESTIMATE.labels(agent_name=node_name).inc(cost)
+
     audit_rec = {
         "agent_name": node_name,
         "gate_fired": 1,
@@ -304,9 +381,29 @@ async def call_llm_with_audit(
 
 
 async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, state: AgentState) -> dict[str, Any]:
+    with tracer.start_as_current_span(f"mcp_call:{tool_name}") as span:
+        span.set_attribute("tool_name", tool_name)
+        span.set_attribute("params", str(params))
+        return await _execute_tool_with_cemg_inner(tool_name, coro_factory, params, state, span)
+
+
+async def _execute_tool_with_cemg_inner(
+    tool_name: str, coro_factory, params: dict, state: AgentState, span
+) -> dict[str, Any]:
     engineer_id = state["engineer_id"]
     tenant_id = state["tenant_id"]
     turn_id = state["turn_id"]
+
+    # DISTRIBUTED RESILIENCE: Circuit Breaker
+    cb = get_circuit_breaker(tool_name)
+    if not cb.can_execute():
+        state["cemg_memory_context"] = (
+            state.get("cemg_memory_context", "") + f"Skipped tool {tool_name} due to OPEN Circuit Breaker.\n"
+        )
+        return {
+            "error": "CIRCUIT_BREAKER_OPEN",
+            "message": f"Circuit breaker open for {tool_name}. Fallback triggered.",
+        }
 
     # 1. Peek signature status
     sig_status = peek_signature_status(
@@ -342,12 +439,30 @@ async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, sta
 
     start = time.perf_counter()
     try:
-        # Simulate connection/execution failures for testing
-        if tool_name == "telemetry_mcp" and params.get("equipment_id") == "equip-failed-telemetry":
-            raise ConnectionError("Telemetry connection timed out (sensor offline).")
+        # DISTRIBUTED RESILIENCE: Retry with exponential backoff & Timeout
+        res = None
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Simulate connection/execution failures for testing
+                if tool_name == "telemetry_mcp" and params.get("equipment_id") == "equip-failed-telemetry":
+                    raise ConnectionError("Telemetry connection timed out (sensor offline).")
 
-        res = await coro_factory()
+                # Enforce timeout (e.g. 5 seconds)
+                res = await asyncio.wait_for(coro_factory(), timeout=5.0)
+                break
+            except (ConnectionError, asyncio.TimeoutError) as e:
+                if attempt == max_retries - 1:
+                    raise e
+                await asyncio.sleep(2**attempt)  # Exponential backoff
+
         latency_ms = int((time.perf_counter() - start) * 1000)
+        TOOL_LATENCY.labels(tool_name=tool_name).observe(time.perf_counter() - start)
+
+        # DISTRIBUTED RESILIENCE: Record Success
+        cb.record_success()
+        update_cb_metrics(tool_name, cb.state)
+        span.set_attribute("success", True)
 
         # Store success experience in CEMG
         store_experience(
@@ -363,6 +478,11 @@ async def execute_tool_with_cemg(tool_name: str, coro_factory, params: dict, sta
         return {"status": "success", "data": res, "latency_ms": latency_ms}
     except Exception as e:
         latency_ms = int((time.perf_counter() - start) * 1000)
+
+        # DISTRIBUTED RESILIENCE: Record Failure
+        cb.record_failure()
+        update_cb_metrics(tool_name, cb.state)
+        TOOL_FAILURES.labels(tool_name=tool_name).inc()
 
         # Store failure experience in CEMG
         store_experience(
@@ -718,6 +838,7 @@ async def fan_out_orchestrator(state: AgentState) -> dict[str, Any]:
 
 async def synthesis_agent(state: AgentState) -> dict[str, Any]:
     if state.get("guardrail_violation"):
+        GUARDRAIL_BLOCKS.labels(agent_name="SynthesisAgent").inc()
         return {
             "final_synthesis": {
                 "evaluation": f"GUARDRAIL BLOCKED: {state['guardrail_violation']}",
@@ -935,7 +1056,7 @@ Crew note: "{state["user_query"]}\""""
 
 
 async def vessel_compatibility_node(state: AgentState) -> dict[str, Any]:
-    profile = await db.get_crew_profile(state["engineer_id"])
+    profile = await db.get_crew_profile(state["engineer_id"], state["tenant_id"])
     vessel_equipment = await db.get_vessel_equipment(state["vessel_id"])
 
     known_models = (

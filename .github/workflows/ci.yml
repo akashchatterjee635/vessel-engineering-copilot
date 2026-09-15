@@ -70,14 +70,3 @@ jobs:
       - name: Build MCP telemetry image
         run: docker build -f Dockerfile.mcp --build-arg SERVER_MODULE=telemetry_server --build-arg SERVER_PORT=8001 -t mcp-telemetry:ci .
 
-      - name: Build MCP compliance image
-        run: docker build -f Dockerfile.mcp --build-arg SERVER_MODULE=compliance_server --build-arg SERVER_PORT=8002 -t mcp-compliance:ci .
-
-      - name: Build MCP history image
-        run: docker build -f Dockerfile.mcp --build-arg SERVER_MODULE=history_server --build-arg SERVER_PORT=8003 -t mcp-history:ci .
-
-      - name: Build MCP weather image
-        run: docker build -f Dockerfile.mcp --build-arg SERVER_MODULE=weather_server --build-arg SERVER_PORT=8004 -t mcp-weather:ci .
-
-      - name: Build MCP port services image
-        run: docker build -f Dockerfile.mcp --build-arg SERVER_MODULE=port_services_server --build-arg SERVER_PORT=8005 -t mcp-port-services:ci .

@@ -29,12 +29,12 @@ async def resolve_equipment(vessel_id: str, name_hint: str | None) -> dict[str, 
         return dict(row) if row else None
 
 
-async def get_crew_profile(engineer_id: str) -> dict[str, Any] | None:
+async def get_crew_profile(engineer_id: str, tenant_id: str) -> dict[str, Any] | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT * FROM crew_profiles WHERE engineer_id = ? ORDER BY updated_at DESC LIMIT 1",
-            (engineer_id,),
+            "SELECT * FROM crew_profiles WHERE engineer_id = ? AND tenant_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (engineer_id, tenant_id),
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
@@ -223,7 +223,9 @@ async def update_crew_profile(
 ) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM crew_profiles WHERE engineer_id = ?", (engineer_id,))
+        cursor = await db.execute(
+            "SELECT * FROM crew_profiles WHERE engineer_id = ? AND tenant_id = ?", (engineer_id, tenant_id)
+        )
         row = await cursor.fetchone()
         if row:
             profile = dict(row)
@@ -240,8 +242,8 @@ async def update_crew_profile(
 
             if updated:
                 await db.execute(
-                    "UPDATE crew_profiles SET known_vessel_classes = ?, known_equipment_models = ?, updated_at = CURRENT_TIMESTAMP WHERE engineer_id = ?",
-                    (json.dumps(known_classes), json.dumps(known_models), engineer_id),
+                    "UPDATE crew_profiles SET known_vessel_classes = ?, known_equipment_models = ?, updated_at = CURRENT_TIMESTAMP WHERE engineer_id = ? AND tenant_id = ?",
+                    (json.dumps(known_classes), json.dumps(known_models), engineer_id, tenant_id),
                 )
         else:
             known_classes = [vessel_class] if vessel_class else []

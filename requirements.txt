@@ -10,3 +10,6 @@ uvicorn>=0.31
 pyyaml>=6.0
 streamlit>=1.38
 langgraph-checkpoint-sqlite
+prometheus_client
+opentelemetry-api
+opentelemetry-sdk
